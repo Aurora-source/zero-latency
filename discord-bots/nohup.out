@@ -1,0 +1,5 @@
+[2026-03-16 20:53:46] [INFO    ] discord.client: logging in using static token
+[2026-03-16 20:53:48] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: 577be2d8f9e20c5f19f7ad506d976ca5).
+/home/lucifer/zero-latency/discord-bots/task_bot.py:87: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+[2026-03-16 21:15:07] [INFO    ] discord.gateway: Shard ID None has successfully RESUMED session 577be2d8f9e20c5f19f7ad506d976ca5.
