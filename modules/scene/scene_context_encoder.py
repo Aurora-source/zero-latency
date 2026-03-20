@@ -297,7 +297,10 @@ class SceneContextEncoder(nn.Module):
         zero_attention_queries: Optional[Tensor] = None
         blocked = base_mask
 
-        if agent_positions is not None and map_positions is not None:
+        # NOTE:
+        # Spatial filtering is optional.
+        # If map_positions is not provided, full attention over map features is used.
+        if map_positions is not None and agent_positions is not None:
             flat_agent_positions = agent_positions.to(device=device, dtype=torch.float32).reshape(
                 batch_size,
                 num_queries,
@@ -340,14 +343,10 @@ class SceneContextEncoder(nn.Module):
     ) -> None:
         """Validate optional spatial-filtering position tensors."""
 
-        if (agent_positions is None) != (map_positions is None):
-            raise ValueError(
-                "agent_positions and map_positions must both be provided for spatial filtering."
-            )
-        if agent_positions is None and map_positions is None:
+        if map_positions is None:
             return
-        if agent_positions is None or map_positions is None:
-            raise ValueError("Both agent_positions and map_positions are required.")
+        if agent_positions is None:
+            raise ValueError("agent_positions must be provided when map_positions are used for spatial filtering.")
         if agent_positions.shape != (batch_size, time_steps, num_agents, 2):
             raise ValueError(
                 "agent_positions must have shape (batch, time, agents, 2), "
