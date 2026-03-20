@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
 import torch
@@ -12,12 +11,10 @@ from torch.utils.data import Dataset
 
 try:
     from nuscenes import NuScenes
-    from nuscenes.eval.prediction.splits import get_prediction_challenge_split
     from nuscenes.prediction import PredictHelper
 except ImportError as exc:  # pragma: no cover - import is validated at runtime.
     NuScenes = None  # type: ignore[assignment]
     PredictHelper = None  # type: ignore[assignment]
-    get_prediction_challenge_split = None  # type: ignore[assignment]
     _NUSCENES_IMPORT_ERROR = exc
 else:
     _NUSCENES_IMPORT_ERROR = None
@@ -27,21 +24,13 @@ from pyquaternion import Quaternion
 __all__ = ["NuScenesDataset"]
 
 
-@dataclass(frozen=True)
-class SceneEntry:
-    """Index entry for a single training sample."""
-
-    sample_token: str
-    agent_annotation_tokens: Sequence[str]
-
-
 class NuScenesDataset(Dataset[Dict[str, Tensor]]):
     """Minimal scene-level nuScenes mini dataset for trajectory prediction.
 
-    Each dataset item corresponds to one nuScenes sample token from the prediction
-    split. Up to ``max_agents`` annotated agents with sufficient history and future
-    context are selected, sorted by current distance to the ego vehicle, and padded
-    with zeros when fewer agents are available.
+    Each dataset item corresponds to one nuScenes sample token. Up to
+    ``max_agents`` annotated agents with sufficient history and future context are
+    selected, sorted by current distance to the ego vehicle, and padded with zeros
+    when fewer agents are available.
 
     Returned tensors use a fixed shape contract:
 
@@ -56,16 +45,14 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
 
     def __init__(
         self,
-        dataroot: str,
+        dataroot: str = "data/raw/nuscenes",
         version: str = "v1.0-mini",
-        split: str = "mini_train",
         past_steps: int = 6,
         future_steps: int = 12,
         max_agents: int = 10,
         dt: float = 0.5,
         map_dim: int = 256,
         dummy_map_elements: int = 1,
-        max_samples: Optional[int] = None,
         verbose: bool = False,
     ) -> None:
         super().__init__()
@@ -75,6 +62,8 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
                 "nuscenes-devkit is required to use NuScenesDataset. "
                 "Install it with `pip install nuscenes-devkit`."
             ) from _NUSCENES_IMPORT_ERROR
+        if version != "v1.0-mini":
+            raise ValueError("NuScenesDataset currently supports only version='v1.0-mini'.")
         if past_steps < 2:
             raise ValueError("past_steps must be at least 2.")
         if future_steps <= 0:
@@ -88,7 +77,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
 
         self.dataroot = dataroot
         self.version = version
-        self.split = split
         self.past_steps = past_steps
         self.future_steps = future_steps
         self.max_agents = max_agents
@@ -96,16 +84,19 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         self.map_dim = map_dim
         self.dummy_map_elements = dummy_map_elements
 
-        self.nusc = NuScenes(version=version, dataroot=dataroot, verbose=verbose)
+        self.nusc = NuScenes(
+            version="v1.0-mini",
+            dataroot=self.dataroot,
+            verbose=verbose,
+        )
         self.helper = PredictHelper(self.nusc)
         self.dummy_map = torch.zeros(dummy_map_elements, map_dim, dtype=torch.float32)
-        self.entries = self._build_index(max_samples=max_samples)
+        self.entries = self._build_index()
 
         if not self.entries:
             raise RuntimeError(
-                "No valid samples were found. Check that the nuScenes mini dataset "
-                "exists at the provided dataroot and contains agents with enough "
-                "past/future context."
+                "No nuScenes samples were indexed. Check that the dataset exists at "
+                f"{self.dataroot}."
             )
 
     def __len__(self) -> int:
@@ -116,15 +107,16 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
     def __getitem__(self, index: int) -> Dict[str, Tensor]:
         """Load one scene sample and return padded agent tensors."""
 
-        entry = self.entries[index]
-        sample = self.nusc.get("sample", entry.sample_token)
+        sample_token = self.entries[index]
+        sample = self.nusc.get("sample", sample_token)
         ego_xy, ego_yaw = self._get_ego_pose(sample)
+        agent_tokens = self._select_agent_tokens(sample_token, ego_xy)
 
         x = torch.zeros(self.past_steps, self.max_agents, 8, dtype=torch.float32)
         positions = torch.zeros(self.past_steps, self.max_agents, 2, dtype=torch.float32)
         future = torch.zeros(self.max_agents, self.future_steps, 2, dtype=torch.float32)
 
-        for agent_index, annotation_token in enumerate(entry.agent_annotation_tokens):
+        for agent_index, annotation_token in enumerate(agent_tokens):
             annotation = self.nusc.get("sample_annotation", annotation_token)
             past_records = self._collect_past_records(annotation)
             future_records = self._collect_future_records(annotation)
@@ -139,11 +131,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
             accelerations = self._differentiate(velocities)
 
             agent_type = self._category_to_type(annotation["category_name"])
-            type_column = torch.full(
-                (self.past_steps, 1),
-                float(agent_type),
-                dtype=torch.float32,
-            )
+            type_column = torch.full((self.past_steps, 1), float(agent_type), dtype=torch.float32)
 
             features = torch.cat(
                 (past_xy_local, velocities, accelerations, headings.unsqueeze(-1), type_column),
@@ -161,54 +149,43 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
             "map": self.dummy_map.clone(),
         }
 
-    def _build_index(self, max_samples: Optional[int]) -> List[SceneEntry]:
-        """Index scene samples with at least one valid agent trajectory."""
+    def _build_index(self) -> List[str]:
+        """Index all sample tokens by iterating through every scene in nuScenes."""
 
-        split_tokens = get_prediction_challenge_split(self.split, dataroot=self.dataroot)
-        sample_tokens: List[str] = []
-        seen_sample_tokens = set()
+        # NOTE:
+        # Using full scene iteration instead of prediction challenge splits.
+        # This avoids dependency on maps/prediction/prediction_scenes.json
+        entries: List[str] = []
 
-        for token_pair in split_tokens:
-            _, sample_token = token_pair.split("_", maxsplit=1)
-            if sample_token in seen_sample_tokens:
-                continue
-            seen_sample_tokens.add(sample_token)
-            sample_tokens.append(sample_token)
+        for scene in self.nusc.scene:
+            sample_token = scene["first_sample_token"]
 
-        entries: List[SceneEntry] = []
-        for sample_token in sample_tokens:
-            sample = self.nusc.get("sample", sample_token)
-            ego_xy, _ = self._get_ego_pose(sample)
-            annotations = self.helper.get_annotations_for_sample(sample_token)
-
-            eligible_annotations = []
-            for annotation in annotations:
-                category_name = annotation["category_name"]
-                if self._category_to_type(category_name, raise_on_unknown=False) is None:
-                    continue
-                if not self._has_required_context(annotation):
-                    continue
-
-                translation = torch.tensor(annotation["translation"][:2], dtype=torch.float32)
-                distance = torch.linalg.vector_norm(translation - ego_xy).item()
-                eligible_annotations.append((distance, annotation["token"]))
-
-            if not eligible_annotations:
-                continue
-
-            eligible_annotations.sort(key=lambda item: item[0])
-            selected_tokens = [token for _, token in eligible_annotations[: self.max_agents]]
-            entries.append(
-                SceneEntry(
-                    sample_token=sample_token,
-                    agent_annotation_tokens=tuple(selected_tokens),
-                )
-            )
-
-            if max_samples is not None and len(entries) >= max_samples:
-                break
+            while sample_token != "":
+                sample = self.nusc.get("sample", sample_token)
+                entries.append(sample_token)
+                sample_token = sample["next"]
 
         return entries
+
+    def _select_agent_tokens(self, sample_token: str, ego_xy: Tensor) -> List[str]:
+        """Select up to ``max_agents`` valid agents for the current sample."""
+
+        annotations = self.helper.get_annotations_for_sample(sample_token)
+        eligible_annotations = []
+
+        for annotation in annotations:
+            category_name = annotation["category_name"]
+            if self._category_to_type(category_name, raise_on_unknown=False) is None:
+                continue
+            if not self._has_required_context(annotation):
+                continue
+
+            translation = torch.tensor(annotation["translation"][:2], dtype=torch.float32)
+            distance = torch.linalg.vector_norm(translation - ego_xy).item()
+            eligible_annotations.append((distance, annotation["token"]))
+
+        eligible_annotations.sort(key=lambda item: item[0])
+        return [token for _, token in eligible_annotations[: self.max_agents]]
 
     def _has_required_context(self, annotation: Dict[str, object]) -> bool:
         """Check whether an annotation has enough past and future steps."""
@@ -271,10 +248,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
     def _records_to_xy(records: Sequence[Dict[str, object]]) -> Tensor:
         """Convert annotation records to an ``(T, 2)`` tensor of xy positions."""
 
-        return torch.tensor(
-            [record["translation"][:2] for record in records],
-            dtype=torch.float32,
-        )
+        return torch.tensor([record["translation"][:2] for record in records], dtype=torch.float32)
 
     def _records_to_heading(self, records: Sequence[Dict[str, object]], ego_yaw: float) -> Tensor:
         """Convert annotation rotations to local-frame heading angles."""
@@ -301,10 +275,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         relative = points_xy - ego_xy.unsqueeze(0)
         cos_yaw = math.cos(ego_yaw)
         sin_yaw = math.sin(ego_yaw)
-        rotation = torch.tensor(
-            [[cos_yaw, sin_yaw], [-sin_yaw, cos_yaw]],
-            dtype=points_xy.dtype,
-        )
+        rotation = torch.tensor([[cos_yaw, sin_yaw], [-sin_yaw, cos_yaw]], dtype=points_xy.dtype)
         return relative @ rotation.T
 
     def _differentiate(self, values: Tensor) -> Tensor:
@@ -318,10 +289,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return derivative
 
     @staticmethod
-    def _category_to_type(
-        category_name: str,
-        raise_on_unknown: bool = True,
-    ) -> Optional[int]:
+    def _category_to_type(category_name: str, raise_on_unknown: bool = True) -> Optional[int]:
         """Map nuScenes category names to coarse trajectory agent types."""
 
         if category_name.startswith("human.pedestrian"):
@@ -336,11 +304,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
 
 
 if __name__ == "__main__":
-    dataset = NuScenesDataset(
-        dataroot="data/nuscenes",
-        split="mini_train",
-        max_samples=2,
-        verbose=True,
-    )
+    dataset = NuScenesDataset(dataroot="data/raw/nuscenes", version="v1.0-mini", verbose=True)
     sample = dataset[0]
     print({key: tuple(value.shape) for key, value in sample.items()})
