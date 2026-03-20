@@ -6,3 +6,11 @@ temporal_transformer:
   embed_dim: 896
   ff_dim: 2048
   dropout: 0.1
+
+social_transformer:
+  num_layers: 6
+  num_heads: 8
+  embed_dim: 896
+  ff_dim: 2048
+  dropout: 0.1
+  distance_sigma: 10.0
