@@ -14,3 +14,11 @@ social_transformer:
   ff_dim: 2048
   dropout: 0.1
   distance_sigma: 10.0
+
+scene_context:
+  num_layers: 4
+  num_heads: 8
+  embed_dim: 896
+  ff_dim: 2048
+  dropout: 0.1
+  max_distance: 50.0
