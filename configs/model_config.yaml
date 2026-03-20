@@ -22,3 +22,8 @@ scene_context:
   ff_dim: 2048
   dropout: 0.1
   max_distance: 50.0
+
+goal_prediction:
+  num_goals: 6
+  hidden_dim: 512
+  dropout: 0.1
