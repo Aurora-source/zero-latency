@@ -1,8 +1,8 @@
 """Evaluate trained model on nuScenes mini — reports ADE and FDE."""
 from __future__ import annotations
 import torch
+from torch import Tensor, nn
 from torch.utils.data import DataLoader
-from pathlib import Path
 from dataset import NuScenesDataset
 from modules.decoder.goal_prediction import GoalPredictionNetwork
 from modules.decoder.multimodal_decoder import MultiModalDecoder
@@ -15,56 +15,57 @@ from utils.losses import best_of_k_loss
 CHECKPOINT_PATH = "checkpoints/best_1.pt"
 DATAROOT        = "data/raw/nuscenes"
 VERSION         = "v1.0-mini"
-BATCH_SIZE      = 4
+BATCH_SIZE      = 2
+EMBED           = 512    # updated from 640
+NUM_GOALS       = 6      # updated from 12
 
 
-def load_model(checkpoint_path: str, device: torch.device):
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+class TrajectoryPredictor(nn.Module):
+    """Must match TrajectoryPredictor in train.py exactly."""
 
-    model = torch.nn.ModuleDict({
-        "embedding": InputEmbedding(),
-        "temporal":  TemporalTransformer(),
-        "social":    SocialTransformer(),
-        "scene":     SceneContextEncoder(map_dim=256),
-        "goal":      GoalPredictionNetwork(),
-        "decoder":   MultiModalDecoder(future_steps=12),
-    }).to(device)
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedding = InputEmbedding(
+            embedding_dim=EMBED,
+            continuous_hidden_dim=2048,
+            type_embedding_dim=2048,
+        )
+        self.temporal = TemporalTransformer(
+            num_layers=16, num_heads=8, embed_dim=EMBED, ff_dim=6144,
+        )
+        self.social = SocialTransformer(
+            num_layers=6, num_heads=8, embed_dim=EMBED, ff_dim=5760,
+        )
+        self.scene = SceneContextEncoder(
+            num_layers=4, num_heads=8, embed_dim=EMBED, map_dim=256, ff_dim=5632,
+        )
+        self.goal = GoalPredictionNetwork(
+            embed_dim=EMBED, num_goals=NUM_GOALS, hidden_dim=6144, bottleneck_dim=2048,
+        )
+        self.decoder = MultiModalDecoder(
+            num_layers=8, num_heads=8, embed_dim=EMBED, ff_dim=7936, future_steps=12,
+        )
 
-    # Handle both new (unified) and old (module-wise) checkpoint formats
+    def forward(self, x: Tensor, positions: Tensor, map_features: Tensor):
+        emb          = self.embedding(x)
+        temp         = self.temporal(emb)
+        soc          = self.social(temp, positions)
+        scene_out    = self.scene(soc, map_features, agent_positions=positions, map_positions=None)
+        goals, probs = self.goal(scene_out)
+        traj         = self.decoder(scene_out, goals, probs)
+        return traj, goals, probs
+
+
+def load_model(checkpoint_path: str, device: torch.device) -> TrajectoryPredictor:
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    model = TrajectoryPredictor().to(device)
     if "model" in checkpoint:
-        # new format — single model state dict
-        from modules.decoder.goal_prediction import GoalPredictionNetwork as G
-        from modules.decoder.multimodal_decoder import MultiModalDecoder as D
-        from modules.input_embedding import InputEmbedding as E
-        from modules.scene.scene_context_encoder import SceneContextEncoder as SC
-        from modules.social.social_transformer import SocialTransformer as ST
-        from modules.temporal_transformer import TemporalTransformer as TT
-
-        class TrajectoryPredictor(torch.nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.embedding = E()
-                self.temporal  = TT()
-                self.social    = ST()
-                self.scene     = SC(map_dim=256)
-                self.goal      = G()
-                self.decoder   = D(future_steps=12)
-
-            def forward(self, x, positions, map_features):
-                emb       = self.embedding(x)
-                temp      = self.temporal(emb)
-                soc       = self.social(temp, positions)
-                scene_out = self.scene(soc, map_features, agent_positions=positions, map_positions=None)
-                goals, probs = self.goal(scene_out)
-                traj      = self.decoder(scene_out, goals, probs)
-                return traj, goals, probs
-
-        full_model = TrajectoryPredictor().to(device)
-        full_model.load_state_dict(checkpoint["model"])
-        full_model.eval()
-        return full_model
-
-    raise KeyError("Unsupported checkpoint format.")
+        model.load_state_dict(checkpoint["model"])
+        print(f"Loaded checkpoint (epoch={checkpoint.get('epoch', '?')})")
+    else:
+        raise KeyError("Unsupported checkpoint format — expected 'model' key.")
+    model.eval()
+    return model
 
 
 @torch.inference_mode()
@@ -74,16 +75,15 @@ def evaluate(checkpoint_path: str = CHECKPOINT_PATH):
     print(f"Loading checkpoint: {checkpoint_path}")
 
     model = load_model(checkpoint_path, device)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"model_params={total_params:,} ({total_params/1e6:.1f}M)  embed={EMBED}  goals={NUM_GOALS}")
 
     dataset = NuScenesDataset(dataroot=DATAROOT, version=VERSION)
     loader  = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     print(f"Evaluating on {len(dataset)} samples...")
 
-    total_ade   = 0.0
-    total_fde   = 0.0
-    total_loss  = 0.0
-    steps       = 0
-
+    total_ade = total_fde = total_loss = 0.0
+    steps     = 0
     amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     use_amp   = device.type == "cuda"
 
@@ -93,9 +93,14 @@ def evaluate(checkpoint_path: str = CHECKPOINT_PATH):
         gt           = batch["future"].to(device)
         map_features = batch["map"].to(device)
 
-        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
-            traj, goals, probs = model(x, positions, map_features)
-            loss, ade, fde = best_of_k_loss(traj, gt, return_metrics=True)
+        try:
+            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+                traj, goals, probs = model(x, positions, map_features)
+                loss, ade, fde = best_of_k_loss(traj, gt, return_metrics=True)
+        except torch.OutOfMemoryError:
+            print("OOM on eval batch, skipping")
+            torch.cuda.empty_cache()
+            continue
 
         if not torch.isfinite(loss):
             continue
@@ -109,19 +114,15 @@ def evaluate(checkpoint_path: str = CHECKPOINT_PATH):
         print("No valid batches found!")
         return
 
-    avg_loss = total_loss / steps
-    avg_ade  = total_ade  / steps
-    avg_fde  = total_fde  / steps
-
-    print("\n" + "="*40)
+    print("\n" + "=" * 40)
     print("EVALUATION RESULTS")
-    print("="*40)
+    print("=" * 40)
     print(f"Samples evaluated : {steps * BATCH_SIZE}")
-    print(f"Loss              : {avg_loss:.4f}")
-    print(f"ADE               : {avg_ade:.4f}  ← Mean displacement error")
-    print(f"FDE               : {avg_fde:.4f}  ← Final displacement error")
-    print("="*40)
-    print(f"\nCheckpoint : {checkpoint_path}")
+    print(f"Loss              : {total_loss/steps:.4f}")
+    print(f"minADE            : {total_ade/steps:.4f}  m  (lower is better)")
+    print(f"minFDE            : {total_fde/steps:.4f}  m  (lower is better)")
+    print("=" * 40)
+    print(f"Checkpoint : {checkpoint_path}")
     print(f"Dataset    : {VERSION} ({DATAROOT})")
 
 

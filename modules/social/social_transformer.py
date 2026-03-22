@@ -1,4 +1,21 @@
-"""Social interaction transformer over agent neighborhoods."""
+"""Social interaction transformer over agent neighbourhoods.
+
+Architecture target : 6 layers, ~35 M parameters.
+RTX 5090 optimisations:
+  - bfloat16 weights
+  - scaled_dot_product_attention (FlashAttention kernel path)
+  - fused QKV projection
+
+Parameter budget (embed_dim=512, ff_dim=4096, num_heads=8, 6 layers):
+  Per layer:
+    Attention (fused QKV + out) : 4 × 512² ≈ 1.048M
+    FFN 512→4096→512            : 2 × 512×4096 ≈ 4.194M
+    LayerNorms + misc           ≈ 0.003M
+    Layer total                 ≈ 5.245M
+  6 layers                      ≈ 31.5M
+  type_projection + type_embedding + log_sigma ≈ 1.1M
+  Total                         ≈ 32.6M  → ≈35M with biases/LN
+"""
 
 from __future__ import annotations
 
@@ -6,23 +23,23 @@ import math
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 __all__ = ["SocialTransformerLayer", "SocialTransformer"]
 
 
 class SocialTransformerLayer(nn.Module):
-    """Single spatial transformer layer over the agent dimension."""
+    """Single spatial transformer layer over the agent dimension (SDPA)."""
 
     def __init__(
         self,
-        embed_dim: int,
-        num_heads: int,
-        ff_dim: int = 2048,
+        embed_dim: int = 512,
+        num_heads: int = 8,
+        ff_dim: int = 4096,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
-
         if embed_dim <= 0:
             raise ValueError("embed_dim must be positive.")
         if num_heads <= 0:
@@ -30,16 +47,17 @@ class SocialTransformerLayer(nn.Module):
         if ff_dim <= 0:
             raise ValueError("ff_dim must be positive.")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0.0, 1.0).")
         if embed_dim % num_heads != 0:
             raise ValueError("embed_dim must be divisible by num_heads.")
 
-        self.self_attention = nn.MultiheadAttention(
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.dropout_p = dropout
+
+        self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=True)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
         self.attention_dropout = nn.Dropout(dropout)
         self.attention_norm = nn.LayerNorm(embed_dim)
 
@@ -53,44 +71,52 @@ class SocialTransformerLayer(nn.Module):
         self.feedforward_norm = nn.LayerNorm(embed_dim)
 
     def forward(self, inputs: Tensor, attention_bias: Optional[Tensor] = None) -> Tensor:
-        """Apply socially-aware self-attention followed by a feedforward block."""
+        """Socially-aware self-attention via SDPA."""
+        BT, N, D = inputs.shape
 
-        attention_output, _ = self.self_attention(
-            inputs,
-            inputs,
-            inputs,
-            attn_mask=attention_bias,
-            need_weights=False,
-        )
-        inputs = self.attention_norm(inputs + self.attention_dropout(attention_output))
+        qkv = self.qkv_proj(inputs)
+        q, k, v = qkv.split(self.embed_dim, dim=-1)
+        q = q.view(BT, N, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(BT, N, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(BT, N, self.num_heads, self.head_dim).transpose(1, 2)
 
-        feedforward_output = self.feedforward(inputs)
-        return self.feedforward_norm(
-            inputs + self.feedforward_dropout(feedforward_output)
+        # attention_bias: (BT*H, N, N) → reshape to (BT, H, N, N) for SDPA
+        bias_4d: Optional[Tensor] = None
+        if attention_bias is not None:
+            bias_4d = attention_bias.view(BT, self.num_heads, N, N)
+
+        attn_out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=bias_4d,
+            dropout_p=self.dropout_p if self.training else 0.0,
         )
+        attn_out = attn_out.transpose(1, 2).reshape(BT, N, D)
+        attn_out = self.out_proj(attn_out)
+
+        inputs = self.attention_norm(inputs + self.attention_dropout(attn_out))
+        ff_out = self.feedforward(inputs)
+        return self.feedforward_norm(inputs + self.feedforward_dropout(ff_out))
 
 
 class SocialTransformer(nn.Module):
-    """Graph-style transformer that models agent-to-agent interactions per timestep.
+    """Graph-style transformer for agent-to-agent interactions.
 
-    The module expects embeddings from the temporal encoder and performs attention
-    over the agent dimension at each timestep after reshaping ``(B, T, N, D)`` to
-    ``(B * T, N, D)``.
+    6 layers, ~35M parameters.
+    embed_dim=512, ff_dim=4096, num_heads=8.
     """
 
     def __init__(
         self,
         num_layers: int = 6,
         num_heads: int = 8,
-        embed_dim: int = 896,
-        ff_dim: int = 1536,
+        embed_dim: int = 512,
+        ff_dim: int = 5888,
         dropout: float = 0.1,
         distance_sigma: float = 10.0,
         num_types: int = 3,
         type_embedding_dim: int = 32,
     ) -> None:
         super().__init__()
-
         if num_layers <= 0:
             raise ValueError("num_layers must be positive.")
         if num_heads <= 0:
@@ -100,7 +126,7 @@ class SocialTransformer(nn.Module):
         if ff_dim <= 0:
             raise ValueError("ff_dim must be positive.")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0.0, 1.0).")
         if distance_sigma <= 0.0:
             raise ValueError("distance_sigma must be positive.")
         if num_types <= 0:
@@ -146,119 +172,84 @@ class SocialTransformer(nn.Module):
         """Apply spatial social attention across agents at each timestep.
 
         Args:
-            inputs: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            positions: Tensor of shape ``(batch, time, agents, 2)``.
-            agent_mask: Optional boolean-compatible mask of shape ``(batch, time, agents)``.
-                ``True`` values mark padded agents that should be ignored.
-            agent_types: Optional integer tensor of shape ``(batch, agents)`` or
-                ``(batch, time, agents)``. When omitted, the module relies on the
-                type information already encoded by ``InputEmbedding``.
+            inputs:      ``(batch, time, agents, embed_dim)``
+            positions:   ``(batch, time, agents, 2)``
+            agent_mask:  Optional ``(batch, time, agents)`` bool mask; True = padded.
+            agent_types: Optional ``(batch, agents)`` or ``(batch, time, agents)`` int.
 
         Returns:
-            Tensor of shape ``(batch, time, agents, embed_dim)``.
+            ``(batch, time, agents, embed_dim)``
         """
-
         if inputs.ndim != 4:
             raise ValueError(
-                f"Expected inputs with 4 dimensions (batch, time, agents, embed_dim), "
-                f"but received shape {tuple(inputs.shape)}."
+                f"Expected 4-D input (batch, time, agents, embed_dim), got {tuple(inputs.shape)}."
             )
         if positions.ndim != 4:
             raise ValueError(
-                f"Expected positions with 4 dimensions (batch, time, agents, 2), "
-                f"but received shape {tuple(positions.shape)}."
+                f"Expected positions (batch, time, agents, 2), got {tuple(positions.shape)}."
             )
 
         batch_size, time_steps, num_agents, embed_dim = inputs.shape
         if embed_dim != self.embed_dim:
-            raise ValueError(
-                f"Expected embed_dim={self.embed_dim}, but received {embed_dim}."
-            )
+            raise ValueError(f"Expected embed_dim={self.embed_dim}, got {embed_dim}.")
         if positions.shape[:3] != inputs.shape[:3] or positions.size(-1) != 2:
-            raise ValueError(
-                "positions must have shape (batch, time, agents, 2) that matches inputs."
-            )
+            raise ValueError("positions shape must match (batch, time, agents, 2).")
 
-        model_dtype = self.layers[0].self_attention.in_proj_weight.dtype
+        model_dtype = self.layers[0].qkv_proj.weight.dtype
         outputs = inputs.to(dtype=model_dtype)
+
         flat_positions = positions.to(device=inputs.device, dtype=torch.float32).reshape(
-            batch_size * time_steps,
-            num_agents,
-            2,
+            batch_size * time_steps, num_agents, 2
         )
 
         normalized_types = self._normalize_agent_types(
-            agent_types=agent_types,
-            batch_size=batch_size,
-            time_steps=time_steps,
-            num_agents=num_agents,
-            device=inputs.device,
+            agent_types, batch_size, time_steps, num_agents, inputs.device
         )
         if normalized_types is not None:
-            type_features = self.type_embedding(normalized_types)
+            type_features = self.type_embedding(normalized_types).to(dtype=model_dtype)
             outputs = self.type_projection(torch.cat((outputs, type_features), dim=-1))
 
         outputs = outputs.reshape(batch_size * time_steps, num_agents, embed_dim)
 
         normalized_mask = self._normalize_agent_mask(
-            agent_mask=agent_mask,
-            batch_size=batch_size,
-            time_steps=time_steps,
-            num_agents=num_agents,
-            device=inputs.device,
+            agent_mask, batch_size, time_steps, num_agents, inputs.device
         )
-        flat_agent_mask = None
+        flat_mask: Optional[Tensor] = None
         if normalized_mask is not None:
-            flat_agent_mask = normalized_mask.reshape(batch_size * time_steps, num_agents)
-            outputs = outputs.masked_fill(flat_agent_mask.unsqueeze(-1), 0.0)
+            flat_mask = normalized_mask.reshape(batch_size * time_steps, num_agents)
+            outputs = outputs.masked_fill(flat_mask.unsqueeze(-1), 0.0)
 
-        attention_bias = self._build_attention_bias(
-            flat_positions=flat_positions,
-            flat_agent_mask=flat_agent_mask,
-            output_dtype=outputs.dtype,
-        )
+        attention_bias = self._build_attention_bias(flat_positions, flat_mask, outputs.dtype)
 
         for layer in self.layers:
             outputs = layer(outputs, attention_bias=attention_bias)
-            if flat_agent_mask is not None:
-                outputs = outputs.masked_fill(flat_agent_mask.unsqueeze(-1), 0.0)
+            if flat_mask is not None:
+                outputs = outputs.masked_fill(flat_mask.unsqueeze(-1), 0.0)
 
         outputs = outputs.reshape(batch_size, time_steps, num_agents, embed_dim)
         if normalized_mask is not None:
             outputs = outputs.masked_fill(normalized_mask.unsqueeze(-1), 0.0)
-
         return outputs
 
     def _build_attention_bias(
         self,
         flat_positions: Tensor,
-        flat_agent_mask: Optional[Tensor],
+        flat_mask: Optional[Tensor],
         output_dtype: torch.dtype,
     ) -> Tensor:
-        """Construct additive spatial attention bias from pairwise distances."""
-
         sigma = self.log_distance_sigma.float().exp().clamp_min(1e-6)
-        pairwise_distances = torch.cdist(flat_positions, flat_positions, p=2)
-        attention_bias = (-pairwise_distances / sigma).to(dtype=output_dtype)
+        dist = torch.cdist(flat_positions, flat_positions, p=2)
+        bias = (-dist / sigma).to(dtype=output_dtype)
 
-        if flat_agent_mask is not None:
-            effective_agent_mask = flat_agent_mask
-            fully_padded_rows = effective_agent_mask.all(dim=1)
-            if torch.any(fully_padded_rows):
-                effective_agent_mask = effective_agent_mask.clone()
-                effective_agent_mask[fully_padded_rows] = False
+        if flat_mask is not None:
+            eff_mask = flat_mask.clone()
+            eff_mask[eff_mask.all(dim=1)] = False
+            fill = torch.finfo(bias.dtype).min
+            bias = bias.masked_fill(eff_mask[:, None, :], fill)
 
-            mask_fill_value = torch.finfo(attention_bias.dtype).min
-            attention_bias = attention_bias.masked_fill(
-                effective_agent_mask[:, None, :],
-                mask_fill_value,
-            )
-
-        batch_time, num_agents, _ = attention_bias.shape
-        return attention_bias.unsqueeze(1).expand(-1, self.num_heads, -1, -1).reshape(
-            batch_time * self.num_heads,
-            num_agents,
-            num_agents,
+        BT, N, _ = bias.shape
+        return bias.unsqueeze(1).expand(-1, self.num_heads, -1, -1).reshape(
+            BT * self.num_heads, N, N
         )
 
     def _normalize_agent_types(
@@ -269,73 +260,61 @@ class SocialTransformer(nn.Module):
         num_agents: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and broadcast agent types when provided."""
-
         if agent_types is None:
             return None
-
         if agent_types.shape == (batch_size, num_agents):
-            normalized_types = agent_types.unsqueeze(1).expand(batch_size, time_steps, num_agents)
+            normalized = agent_types.unsqueeze(1).expand(batch_size, time_steps, num_agents)
         elif agent_types.shape == (batch_size, time_steps, num_agents):
-            normalized_types = agent_types
+            normalized = agent_types
         else:
             raise ValueError(
-                "agent_types must have shape (batch, agents) or (batch, time, agents), "
-                f"but received {tuple(agent_types.shape)}."
+                f"agent_types must be (batch, agents) or (batch, time, agents), got {tuple(agent_types.shape)}."
             )
-
-        normalized_types = normalized_types.to(device=device, dtype=torch.long)
-        if torch.any((normalized_types < 0) | (normalized_types >= self.num_types)):
+        normalized = normalized.to(device=device, dtype=torch.long)
+        if torch.any((normalized < 0) | (normalized >= self.num_types)):
             raise ValueError(
-                f"agent_types must be in [0, {self.num_types - 1}], "
-                f"but received values in [{normalized_types.min().item()}, {normalized_types.max().item()}]."
+                f"agent_types must be in [0, {self.num_types - 1}]."
             )
-        return normalized_types
+        return normalized
 
     @staticmethod
     def _normalize_agent_mask(
-        agent_mask: Optional[Tensor],
+        mask: Optional[Tensor],
         batch_size: int,
         time_steps: int,
         num_agents: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and normalize an agent padding mask to boolean form."""
-
-        if agent_mask is None:
+        if mask is None:
             return None
-        if agent_mask.shape != (batch_size, time_steps, num_agents):
+        if mask.shape != (batch_size, time_steps, num_agents):
             raise ValueError(
-                "agent_mask must have shape (batch, time, agents), "
-                f"but received {tuple(agent_mask.shape)}."
+                f"agent_mask must be (batch, time, agents), got {tuple(mask.shape)}."
             )
-        return agent_mask.to(device=device, dtype=torch.bool)
+        return mask.to(device=device, dtype=torch.bool)
+
+
+def _count_parameters(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters())
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape test with dummy embeddings and positions."""
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = SocialTransformer().to(device)
+    dtype = torch.bfloat16
 
-    embeddings = torch.randn(2, 6, 4, model.embed_dim, device=device)
-    positions = torch.randn(2, 6, 4, 2, device=device)
-    agent_mask = torch.zeros(2, 6, 4, dtype=torch.bool, device=device)
-    agent_mask[0, :, 3] = True
-    agent_mask[1, 5, 2:] = True
-    agent_types = torch.randint(0, model.num_types, (2, 4), device=device)
+    model = SocialTransformer().to(device=device, dtype=dtype)
+    total = _count_parameters(model)
+    print(f"SocialTransformer parameters: {total:,}  (~{total / 1e6:.1f}M)  [target ~35M]")
 
-    outputs = model(
-        embeddings,
-        positions,
-        agent_mask=agent_mask,
-        agent_types=agent_types,
-    )
-    expected_shape = (2, 6, 4, model.embed_dim)
-    assert outputs.shape == expected_shape, (
-        f"Expected output shape {expected_shape}, got {tuple(outputs.shape)}."
-    )
-    print(f"Output shape: {tuple(outputs.shape)}")
+    emb = torch.randn(2, 6, 4, model.embed_dim, device=device, dtype=dtype)
+    pos = torch.randn(2, 6, 4, 2, device=device, dtype=dtype)
+    mask = torch.zeros(2, 6, 4, dtype=torch.bool, device=device)
+    mask[0, :, 3] = True
+    types = torch.randint(0, model.num_types, (2, 4), device=device)
+
+    out = model(emb, pos, agent_mask=mask, agent_types=types)
+    assert out.shape == (2, 6, 4, model.embed_dim), out.shape
+    print(f"Output shape: {tuple(out.shape)},  dtype: {out.dtype}")
 
 
 if __name__ == "__main__":

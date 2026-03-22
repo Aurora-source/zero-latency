@@ -45,7 +45,7 @@ class DecoderLayer(nn.Module):
         self,
         embed_dim: int = 512,
         num_heads: int = 8,
-        ff_dim: int = 1536,
+        ff_dim: int = 8192,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
@@ -135,7 +135,7 @@ class MultiModalDecoder(nn.Module):
         num_layers: int = 8,
         num_heads: int = 8,
         embed_dim: int = 512,
-        ff_dim: int = 1536,
+        ff_dim: int = 8192,
         dropout: float = 0.1,
         future_steps: int = 12,
     ) -> None:

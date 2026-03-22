@@ -129,8 +129,8 @@ class SceneContextEncoder(nn.Module):
         num_layers: int = 4,
         num_heads: int = 8,
         embed_dim: int = 512,
-        map_dim: int = 256,
-        ff_dim: int = 5120,
+        map_dim: int = 256, 
+        ff_dim: int = 5760,
         dropout: float = 0.1,
         max_distance: float = 50.0,
     ) -> None:
