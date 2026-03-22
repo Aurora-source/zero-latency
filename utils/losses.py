@@ -1,4 +1,4 @@
-"""Loss functions for multi-modal trajectory prediction."""
+"""Loss functions for multi-modal trajectory prediction ( Now works with real data instead of synthetic )"""
 
 from __future__ import annotations
 
