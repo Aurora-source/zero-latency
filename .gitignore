@@ -1,6 +1,4 @@
 discord-bots/
-# Write .gitignore file properly
-@"
 .venv/
 .venv-1/
 venv/
@@ -14,4 +12,10 @@ __pycache__/
 *.tar.gz
 experiments/
 *.log
-"@ | Out-File -FilePath .gitignore -Encoding utf8
+.venv/
+checkpoints/
+data/
+__pycache__/.venv/
+checkpoints/
+data/
+__pycache__/
