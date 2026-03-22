@@ -318,12 +318,12 @@ Supported versions:
 
 set -e  # stop on any error
 
-echo "=== Cloning repo ==="
+echo "Cloning repo"
 git clone https://github.com/Aurora-source/zero-latency.git
 cd zero-latency
 git checkout working-rikon
 
-echo "=== Installing dependencies (excluding torch) ==="
+echo "Installing dependencies (excluding torch)"
 pip install \
   cachetools==7.0.5 \
   colorama==0.4.6 \
