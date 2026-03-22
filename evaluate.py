@@ -3,7 +3,6 @@ from __future__ import annotations
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
-from pathlib import Path
 from dataset import NuScenesDataset
 from modules.decoder.goal_prediction import GoalPredictionNetwork
 from modules.decoder.multimodal_decoder import MultiModalDecoder
@@ -17,20 +16,21 @@ CHECKPOINT_PATH = "checkpoints/best_1.pt"
 DATAROOT        = "data/raw/nuscenes"
 VERSION         = "v1.0-mini"
 BATCH_SIZE      = 2
-EMBED           = 256    # must match train.py
+EMBED           = 640    # must match train.py
+NUM_GOALS       = 12     # must match train.py
 
 
 class TrajectoryPredictor(nn.Module):
-    """RTX 2050 safe model — must match train.py dims exactly."""
+    """Must match TrajectoryPredictor in train.py exactly."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.embedding = InputEmbedding(embedding_dim=EMBED, continuous_hidden_dim=512)
-        self.temporal  = TemporalTransformer(num_layers=4, embed_dim=EMBED, num_heads=4, ff_dim=512)
-        self.social    = SocialTransformer(num_layers=2, embed_dim=EMBED, num_heads=4, ff_dim=512)
-        self.scene     = SceneContextEncoder(num_layers=2, embed_dim=EMBED, num_heads=4, ff_dim=512, map_dim=256)
-        self.goal      = GoalPredictionNetwork(embed_dim=EMBED, hidden_dim=512, bottleneck_dim=256)
-        self.decoder   = MultiModalDecoder(num_layers=2, embed_dim=EMBED, num_heads=4, ff_dim=512, future_steps=12)
+        self.embedding = InputEmbedding(embedding_dim=EMBED, continuous_hidden_dim=1280)
+        self.temporal  = TemporalTransformer(num_layers=8,  embed_dim=EMBED, num_heads=8, ff_dim=1280)
+        self.social    = SocialTransformer(num_layers=4,    embed_dim=EMBED, num_heads=8, ff_dim=1280)
+        self.scene     = SceneContextEncoder(num_layers=3,  embed_dim=EMBED, num_heads=8, ff_dim=1280, map_dim=256)
+        self.goal      = GoalPredictionNetwork(embed_dim=EMBED, hidden_dim=1280, bottleneck_dim=640, num_goals=NUM_GOALS)
+        self.decoder   = MultiModalDecoder(num_layers=4,    embed_dim=EMBED, num_heads=8, ff_dim=1280, future_steps=12)
 
     def forward(self, x: Tensor, positions: Tensor, map_features: Tensor):
         emb       = self.embedding(x)
@@ -44,15 +44,12 @@ class TrajectoryPredictor(nn.Module):
 
 def load_model(checkpoint_path: str, device: torch.device) -> TrajectoryPredictor:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
-
     model = TrajectoryPredictor().to(device)
-
     if "model" in checkpoint:
         model.load_state_dict(checkpoint["model"])
-        print(f"Loaded model from checkpoint (epoch={checkpoint.get('epoch', '?')})")
+        print(f"Loaded checkpoint (epoch={checkpoint.get('epoch', '?')})")
     else:
         raise KeyError("Unsupported checkpoint format — expected 'model' key.")
-
     model.eval()
     return model
 
@@ -64,19 +61,15 @@ def evaluate(checkpoint_path: str = CHECKPOINT_PATH):
     print(f"Loading checkpoint: {checkpoint_path}")
 
     model = load_model(checkpoint_path, device)
-
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"model_params={total_params:,} ({total_params/1e6:.1f}M)")
+    print(f"model_params={total_params:,} ({total_params/1e6:.1f}M)  embed={EMBED}  goals={NUM_GOALS}")
 
     dataset = NuScenesDataset(dataroot=DATAROOT, version=VERSION)
     loader  = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     print(f"Evaluating on {len(dataset)} samples...")
 
-    total_ade  = 0.0
-    total_fde  = 0.0
-    total_loss = 0.0
-    steps      = 0
-
+    total_ade = total_fde = total_loss = 0.0
+    steps = 0
     amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     use_amp   = device.type == "cuda"
 
@@ -107,17 +100,13 @@ def evaluate(checkpoint_path: str = CHECKPOINT_PATH):
         print("No valid batches found!")
         return
 
-    avg_loss = total_loss / steps
-    avg_ade  = total_ade  / steps
-    avg_fde  = total_fde  / steps
-
     print("\n" + "="*40)
     print("EVALUATION RESULTS")
     print("="*40)
     print(f"Samples evaluated : {steps * BATCH_SIZE}")
-    print(f"Loss              : {avg_loss:.4f}")
-    print(f"minADE            : {avg_ade:.4f}  m  (lower is better)")
-    print(f"minFDE            : {avg_fde:.4f}  m  (lower is better)")
+    print(f"Loss              : {total_loss/steps:.4f}")
+    print(f"minADE            : {total_ade/steps:.4f}  m  (lower is better)")
+    print(f"minFDE            : {total_fde/steps:.4f}  m  (lower is better)")
     print("="*40)
     print(f"Checkpoint : {checkpoint_path}")
     print(f"Dataset    : {VERSION} ({DATAROOT})")
