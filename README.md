@@ -8,8 +8,8 @@ A multi-modal transformer-based trajectory prediction model trained on the nuSce
 
 | Metric | Value | Benchmark |
 |---|---|---|
-| Mean ADE | 1.31 m | Beats PECNet (2.10m) |
-| Mean FDE | 1.98 m | Beats Trajectron++ SOTA (2.91m) |
+| Mean ADE | 1.31 m | — |
+| Mean FDE | 1.98 m | — |
 | Median ADE | 0.64 m | — |
 | Median FDE | 0.72 m | — |
 
