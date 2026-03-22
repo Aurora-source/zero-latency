@@ -19,4 +19,4 @@ __pycache__/.venv/
 checkpoints/
 data/
 __pycache__/
-.venv1/
+.venv-1/
