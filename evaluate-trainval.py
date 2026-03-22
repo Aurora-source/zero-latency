@@ -24,7 +24,7 @@ from utils.losses import best_of_k_loss
 
 # --- Default config ---
 CHECKPOINT_PATH = "checkpoints/best_1.pt"
-DATAROOT        = "D:/v1.0-trainval"        # full trainval on D: drive
+DATAROOT        = "data/raw/nuscenes"        
 VERSION         = "v1.0-trainval"
 BATCH_SIZE      = 4
 OUTPUT_DIR      = "evaluation_results"
