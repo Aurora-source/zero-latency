@@ -21,11 +21,17 @@ Evaluated on full nuScenes v1.0-trainval (34,149 samples).
 
 ```
 zero-latency/
+├── checkpoints/                        # Saved model weights
+│   ├── best_1.pt                       # Best validation loss checkpoint
+│   ├── best_2.pt                       # Second best checkpoint
+│   └── latest.pt                       # Most recent epoch
+├── configs/                            # Model configs
+├── data/
+│   └── links.txt                       # nuScenes download links for aria2
 ├── dataset/
-│   └── nuscenes_dataset.py      # nuScenes loader (supports mini + trainval + test)
+│   └── nuscenes_dataset.py             # nuScenes loader (mini + trainval + test)
 ├── modules/
 │   ├── input_embedding.py
-│   ├── temporal_transformer.py
 │   ├── social/
 │   │   └── social_transformer.py
 │   ├── scene/
@@ -33,17 +39,17 @@ zero-latency/
 │   └── decoder/
 │       ├── goal_prediction.py
 │       └── multimodal_decoder.py
+├── pipeline-architecture/              # Architecture diagrams
 ├── utils/
-│   └── losses.py                # best_of_k_loss, goal_classification_loss
-├── train.py                     # Cloud training (RTX 5090 + Linux)
-├── train-windows-rtx5070.py     # Local training (RTX 5070 Laptop + Windows)
-├── evaluate2.py                 # Full evaluation with plots
-├── infer_test.py                # nuScenes leaderboard submission
-├── setup.sh                     # Cloud environment setup
-└── checkpoints/                 # Saved model weights
-    ├── best_1.pt                # Best validation loss checkpoint
-    ├── best_2.pt                # Second best checkpoint
-    └── latest.pt                # Most recent epoch
+│   └── losses.py                       # best_of_k_loss, goal_classification_loss
+├── .gitignore
+├── README.md
+├── evaluate-mini.py                    # Evaluate on v1.0-mini
+├── evaluate-trainval.py                # Evaluate on v1.0-trainval with plots
+├── requirements.txt
+├── setup.sh                            # Cloud environment setup script
+├── train-linux-32GB-VRAM.py            # Cloud training (RTX 5090, Linux)
+└── train-windows-8GB-VRAM.py           # Local training (RTX 5070 Laptop, Windows)
 ```
 
 ---
@@ -64,14 +70,22 @@ pip install -r requirements.txt
 ### 2. Train on nuScenes mini
 
 ```powershell
-python train-windows-rtx5070.py
+python train-windows-8GB-VRAM.py
 ```
 
-### 3. Evaluate
+### 3. Evaluate on mini dataset
 
 ```powershell
-python evaluate2.py --dataroot "data/raw/nuscenes" --version v1.0-mini --batch_size 16
+python evaluate-mini.py
 ```
+
+### 4. Evaluate on trainval dataset
+
+```powershell
+python evaluate-trainval.py --dataroot "<path-location-where-trainval-dataset-is-stored>" --batch_size 32
+```
+
+---
 
 ---
 
@@ -99,9 +113,6 @@ Copy your `links.txt` (from nuScenes download page) to the instance, then downlo
 # Download trainval dataset parts to nuscenes folder
 mkdir -p /workspace/zero-latency/nuscenes
 cd /workspace/zero-latency/nuscenes
-
-# Download links.txt from Google Drive first
-rclone copy "Rikon:nuscenes/links.txt" .
 
 # Run aria2 to download all parts
 aria2c -c \
@@ -163,9 +174,9 @@ cd /workspace/zero-latency
 # Train with trainval dataset (parts 1+2 = ~6000 samples)
 NUSCENES_ROOT=/workspace/zero-latency/nuscenes \
 TORCH_COMPILE_MODE=reduce-overhead \
-BATCH_SIZE=32 \
+BATCH_SIZE=72 \
 EVAL_BATCH_SIZE=16 \
-python train.py
+TORCH_COMPILE_MODE=reduce-overhead BATCH_SIZE=32 EVAL_BATCH_SIZE=16 python train-linux-32GB-VRAM.py
 ```
 
 ---
@@ -244,7 +255,7 @@ rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" "C:\Users\Rikon\zero-late
 Training automatically resumes from `checkpoints/best_1.pt` on every run. To start fresh:
 
 ```bash
-RESUME=0 python train.py
+TORCH_COMPILE_MODE=reduce-overhead BATCH_SIZE=72 EVAL_BATCH_SIZE=16 python train-linux-32GB-VRAM.py
 ```
 
 ---
@@ -257,8 +268,8 @@ RESUME=0 python train.py
 # On local machine (mini dataset)
 python evaluate2.py --dataroot "data/raw/nuscenes" --version v1.0-mini --batch_size 16
 
-# On local machine (full trainval on D: drive)
-python evaluate2.py --dataroot "D:/v1.0-trainval" --version v1.0-trainval --batch_size 32
+# On local machine (full trainval)
+python evaluate2.py --dataroot "<path-to-full-dataset>" --version v1.0-trainval --batch_size 40
 ```
 
 Saves plots to `evaluation_results/evaluation_results.png` including:
@@ -266,17 +277,7 @@ Saves plots to `evaluation_results/evaluation_results.png` including:
 - ADE/FDE histograms
 - Cumulative error distribution
 - Summary metrics table
-
-### Generate leaderboard submission
-
-```powershell
-# Generate submission for official val split
-python infer_test.py --dataroot "D:/v1.0-trainval" --split val
-
-# Submit submission/submission_val.json to:
-# https://eval.ai/web/challenges/challenge-page/591/overview
-```
-
+  
 ---
 
 ## Hardware Requirements
