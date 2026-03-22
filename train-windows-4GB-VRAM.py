@@ -57,7 +57,7 @@ class TrainConfig:
     version: str          = "v1.0-mini"
     checkpoint_dir: str   = os.getenv("CHECKPOINT_DIR", "checkpoints")
     dataset_limit: int    = int(os.getenv("DATASET_LIMIT", "404"))
-    run_epochs: int       = int(os.getenv("RUN_EPOCHS", "40"))
+    run_epochs: int       = int(os.getenv("RUN_EPOCHS", "5"))
 
     # --- 4 GB VRAM: micro-batch=2, accumulate to effective=16 ---
     batch_size: int        = int(os.getenv("BATCH_SIZE", "2"))

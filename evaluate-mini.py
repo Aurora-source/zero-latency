@@ -16,8 +16,8 @@ CHECKPOINT_PATH = "checkpoints/best_1.pt"
 DATAROOT        = "data/raw/nuscenes"
 VERSION         = "v1.0-mini"
 BATCH_SIZE      = 2
-EMBED           = 512    # updated from 640
-NUM_GOALS       = 6      # updated from 12
+EMBED           = 896   # original embed_dim — matches saved checkpoints
+NUM_GOALS       = 6
 
 
 class TrajectoryPredictor(nn.Module):
@@ -26,12 +26,15 @@ class TrajectoryPredictor(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.embedding = InputEmbedding(
+            continuous_dim=8,
             embedding_dim=EMBED,
-            continuous_hidden_dim=2048,
-            type_embedding_dim=2048,
+            continuous_hidden_dim=2560,
+            type_embedding_dim=2560,
+            num_types=3,
+            dropout=0.1,
         )
         self.temporal = TemporalTransformer(
-            num_layers=16, num_heads=8, embed_dim=EMBED, ff_dim=6144,
+            num_layers=16, num_heads=8, embed_dim=EMBED, ff_dim=2048,
         )
         self.social = SocialTransformer(
             num_layers=6, num_heads=8, embed_dim=EMBED, ff_dim=5760,
@@ -40,7 +43,7 @@ class TrajectoryPredictor(nn.Module):
             num_layers=4, num_heads=8, embed_dim=EMBED, map_dim=256, ff_dim=5632,
         )
         self.goal = GoalPredictionNetwork(
-            embed_dim=EMBED, num_goals=NUM_GOALS, hidden_dim=6144, bottleneck_dim=2048,
+            embed_dim=EMBED, num_goals=NUM_GOALS, hidden_dim=4096, bottleneck_dim=2560,
         )
         self.decoder = MultiModalDecoder(
             num_layers=8, num_heads=8, embed_dim=EMBED, ff_dim=7936, future_steps=12,
@@ -59,11 +62,10 @@ class TrajectoryPredictor(nn.Module):
 def load_model(checkpoint_path: str, device: torch.device) -> TrajectoryPredictor:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model = TrajectoryPredictor().to(device)
-    if "model" in checkpoint:
-        model.load_state_dict(checkpoint["model"])
-        print(f"Loaded checkpoint (epoch={checkpoint.get('epoch', '?')})")
-    else:
+    if "model" not in checkpoint:
         raise KeyError("Unsupported checkpoint format — expected 'model' key.")
+    model.load_state_dict(checkpoint["model"])
+    print(f"Loaded checkpoint (epoch={checkpoint.get('epoch', '?')})")
     model.eval()
     return model
 

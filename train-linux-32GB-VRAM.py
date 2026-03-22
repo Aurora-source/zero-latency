@@ -2,20 +2,10 @@
 
 Target hardware : RTX 5090 (32 GB VRAM, Blackwell), AMD EPYC 64-core, 161 GB RAM.
 
-Architecture dims (matched to rebuilt modules):
-  embed_dim = 512   shared across all stages
-  num_goals = 6     multimodal goal proposals
+Architecture dims (matched to ORIGINAL modules with nn.MultiheadAttention):
+  embed_dim = 896   original shared dim — preserves checkpoint compatibility
+  num_goals = 6
   future_steps = 12
-
-RTX 5090 optimisations:
-  - bfloat16 AMP  (Blackwell native Tensor Core path, no GradScaler needed)
-  - F.scaled_dot_product_attention in all modules → FlashAttention-3 kernel
-  - torch.compile(mode="max-autotune") → Triton kernel search + graph fusion
-  - fused AdamW
-  - torch.set_float32_matmul_precision("high") → TF32 for residual fp32
-  - 32 DataLoader workers + fork multiprocessing (Linux only)
-  - non_blocking device transfers, persistent workers, prefetch_factor=6
-  - pin_memory to GPU (pin_memory_device)
 """
 
 from __future__ import annotations
@@ -47,7 +37,7 @@ from modules.temporal_transformer import TemporalTransformer
 from utils.losses import best_of_k_loss, goal_classification_loss
 
 # ── Architecture constants ────────────────────────────────────────────────────
-EMBED        = 512   # shared embed_dim across all modules
+EMBED        = 896   # original embed_dim — matches saved checkpoints
 NUM_GOALS    = 6
 FUTURE_STEPS = 12
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,34 +47,28 @@ FUTURE_STEPS = 12
 class TrainConfig:
     """Training configuration for RTX 5090 + AMD EPYC 64-core + 161 GB RAM."""
 
-    # --- Dataset ---
     dataset_root: str   = os.getenv("NUSCENES_ROOT", "nuscenes")
     version: str        = os.getenv("NUSCENES_VERSION", "v1.0-trainval")
     checkpoint_dir: str = os.getenv("CHECKPOINT_DIR", "checkpoints")
     dataset_limit: int  = int(os.getenv("DATASET_LIMIT", "6000"))
     run_epochs: int     = int(os.getenv("RUN_EPOCHS", "40"))
 
-    # --- Batch / memory (RTX 5090 32 GB VRAM) ---
-    # embed_dim dropped 896→512 so we can push batch_size higher
-    batch_size: int        = int(os.getenv("BATCH_SIZE", "256"))
-    eval_batch_size: int   = int(os.getenv("EVAL_BATCH_SIZE", "128"))
+    batch_size: int        = int(os.getenv("BATCH_SIZE", "128"))
+    eval_batch_size: int   = int(os.getenv("EVAL_BATCH_SIZE", "64"))
     grad_accum_steps: int  = int(os.getenv("GRAD_ACCUM_STEPS", "1"))
 
-    # --- Optimiser ---
     learning_rate: float      = float(os.getenv("LR", "5e-5"))
     min_learning_rate: float  = float(os.getenv("MIN_LR", "1e-6"))
     weight_decay: float       = float(os.getenv("WEIGHT_DECAY", "1e-2"))
     goal_loss_weight: float   = float(os.getenv("GOAL_LOSS_WEIGHT", "0.1"))
     gradient_clip_norm: float = float(os.getenv("GRAD_CLIP", "1.0"))
 
-    # --- Data loading (64-core EPYC) ---
     train_repeat_factor: int = int(os.getenv("TRAIN_REPEAT_FACTOR", "1"))
     validation_ratio: float  = float(os.getenv("VAL_RATIO", "0.1"))
     log_interval: int        = int(os.getenv("LOG_INTERVAL", "10"))
     num_workers: int         = int(os.getenv("NUM_WORKERS", "32"))
     prefetch_factor: int     = int(os.getenv("PREFETCH_FACTOR", "6"))
 
-    # --- Misc ---
     seed: int                = int(os.getenv("SEED", "7"))
     resume: bool             = os.getenv("RESUME", "1") == "1"
     use_compile: bool        = os.getenv("TORCH_COMPILE", "1") == "1"
@@ -94,7 +78,7 @@ class TrainConfig:
 
 
 class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
-    """Cache dataset fully in RAM — 161 GB available, no I/O bottleneck during training."""
+    """Cache dataset fully in RAM — 161 GB available."""
 
     def __init__(self, dataset: Dataset[Dict[str, Tensor]]) -> None:
         super().__init__()
@@ -133,15 +117,13 @@ class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
 
 
 class TrajectoryPredictor(nn.Module):
-    """Full trajectory prediction stack — embed_dim=512, tuned for RTX 5090.
+    """Full trajectory prediction stack — embed_dim=896, original architecture.
 
-    Total: ~223 M parameters.
-      InputEmbedding         ~8 M   (continuous_hidden=2048, type_emb=2048)
-      TemporalTransformer   ~110 M  (16 layers, ff=6144)
-      SocialTransformer      ~35 M  (6 layers, ff=4096)
-      SceneContextEncoder    ~25 M  (4 layers, ff=5120)
-      GoalPredictionNetwork  ~15 M  (hidden=6144, bottleneck=2048)
-      MultiModalDecoder      ~30 M  (8 layers, ff=1536)
+    Key names in checkpoints (nn.MultiheadAttention):
+      temporal:  layers.N.self_attention.in_proj_weight / out_proj.weight
+      social:    layers.N.self_attention.in_proj_weight / out_proj.weight
+      scene:     layers.N.cross_attention.in_proj_weight / out_proj.weight
+      decoder:   layers.N.self_attention.* / cross_attention.*
     """
 
     def __init__(self) -> None:
@@ -149,8 +131,8 @@ class TrajectoryPredictor(nn.Module):
         self.embedding = InputEmbedding(
             continuous_dim=8,
             embedding_dim=EMBED,
-            continuous_hidden_dim=2048,
-            type_embedding_dim=2048,
+            continuous_hidden_dim=2560,
+            type_embedding_dim=2560,
             num_types=3,
             dropout=0.1,
         )
@@ -158,14 +140,14 @@ class TrajectoryPredictor(nn.Module):
             num_layers=16,
             num_heads=8,
             embed_dim=EMBED,
-            ff_dim=6144,
+            ff_dim=2048,
             dropout=0.1,
         )
         self.social = SocialTransformer(
             num_layers=6,
             num_heads=8,
             embed_dim=EMBED,
-            ff_dim=4096,
+            ff_dim=5760,
             dropout=0.1,
         )
         self.scene = SceneContextEncoder(
@@ -173,21 +155,21 @@ class TrajectoryPredictor(nn.Module):
             num_heads=8,
             embed_dim=EMBED,
             map_dim=256,
-            ff_dim=5120,
+            ff_dim=5632,
             dropout=0.1,
         )
         self.goal = GoalPredictionNetwork(
             embed_dim=EMBED,
             num_goals=NUM_GOALS,
-            hidden_dim=6144,
-            bottleneck_dim=2048,
+            hidden_dim=4096,
+            bottleneck_dim=2560,
             dropout=0.1,
         )
         self.decoder = MultiModalDecoder(
             num_layers=8,
             num_heads=8,
             embed_dim=EMBED,
-            ff_dim=1536,
+            ff_dim=7936,
             dropout=0.1,
             future_steps=FUTURE_STEPS,
         )
@@ -204,8 +186,6 @@ class TrajectoryPredictor(nn.Module):
         return traj, goals, probs
 
 
-# ── Utility functions (unchanged contract, kept DRY) ─────────────────────────
-
 def set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
@@ -214,16 +194,14 @@ def set_seed(seed: int) -> None:
 
 
 def configure_runtime(device: torch.device) -> None:
-    """Apply RTX 5090 / Blackwell runtime flags."""
-    torch.set_float32_matmul_precision("high")      # TF32 for residual fp32 ops
-    torch.set_num_threads(32)                        # EPYC 64-core — 32 for CPU ops
+    torch.set_float32_matmul_precision("high")
+    torch.set_num_threads(32)
     torch.set_num_interop_threads(8)
-
     if device.type != "cuda":
         return
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32       = True
-    torch.backends.cudnn.benchmark        = True    # auto-tune convolution kernels
+    torch.backends.cudnn.benchmark        = True
     torch.backends.cudnn.deterministic    = False
 
 
@@ -261,7 +239,7 @@ def make_dataloader(
         kwargs["persistent_workers"] = True
         kwargs["prefetch_factor"]    = prefetch_factor
         if os.name != "nt":
-            kwargs["multiprocessing_context"] = "fork"   # Linux: fork is fastest
+            kwargs["multiprocessing_context"] = "fork"
     return DataLoader(dataset, **kwargs)
 
 
@@ -271,23 +249,18 @@ def build_datasets(
     print(f"Loading {config.version} from {config.dataset_root!r}...")
     raw  = NuScenesDataset(dataroot=config.dataset_root, version=config.version)
     print(f"  Total samples indexed: {len(raw)}")
-
     limited = Subset(raw, range(min(config.dataset_limit, len(raw))))
     cached  = CachedTrajectoryDataset(limited)
-
     if len(cached) < 2:
         raise RuntimeError("Need at least 2 cached samples.")
-
     val_size   = max(1, int(round(len(cached) * config.validation_ratio)))
     train_size = len(cached) - val_size
-
     train_sub, val_sub = random_split(
         cached, [train_size, val_size],
         generator=torch.Generator().manual_seed(config.seed),
     )
     if config.train_repeat_factor > 1:
         train_sub = ConcatDataset([train_sub] * config.train_repeat_factor)
-
     return train_sub, val_sub
 
 
@@ -296,7 +269,7 @@ def build_optimizer(
 ) -> torch.optim.Optimizer:
     kwargs: dict = {"lr": config.learning_rate, "weight_decay": config.weight_decay}
     if device.type == "cuda" and supports_fused_adamw():
-        kwargs["fused"] = True    # fused kernel — ~30% faster on Ampere+
+        kwargs["fused"] = True
     return torch.optim.AdamW(model.parameters(), **kwargs)
 
 
@@ -348,9 +321,7 @@ def load_model_state(model: nn.Module, checkpoint: Dict[str, object]) -> None:
     raise KeyError("Checkpoint does not contain a supported model state.")
 
 
-def update_best_checkpoints(
-    checkpoint: Dict[str, object], checkpoint_dir: Path
-) -> None:
+def update_best_checkpoints(checkpoint: Dict[str, object], checkpoint_dir: Path) -> None:
     candidates = [checkpoint]
     for rank in range(1, 3):
         path = checkpoint_dir / f"best_{rank}.pt"
@@ -393,31 +364,25 @@ def load_resume_checkpoint(
                 scheduler.load_state_dict(ckpt["scheduler"])
             if scaler is not None and scaler.is_enabled() and ckpt.get("scaler") is not None:
                 scaler.load_state_dict(ckpt["scaler"])
-
             start_epoch = int(ckpt.get("epoch", 0))
             global_step = int(ckpt.get("global_step", 0))
             best_loss   = extract_checkpoint_loss(ckpt)
-
-            current_lr = optimizer.param_groups[0]["lr"]
+            current_lr  = optimizer.param_groups[0]["lr"]
             if current_lr < config.min_learning_rate:
                 for pg in optimizer.param_groups:
                     pg["lr"] = config.learning_rate
                 print(f"  LR was zero — reset to {config.learning_rate:.2e}")
             else:
                 print(f"  LR continuing at {current_lr:.2e}")
-
             print(f"Resumed from {resume_path}  epoch={start_epoch}  best_val={best_loss:.4f}")
             return start_epoch, global_step, best_loss
         except Exception as exc:
             print(f"Failed to resume from {resume_path}: {exc}")
-
     print("No checkpoint found — starting from scratch.")
     return 0, 0, float("inf")
 
 
-def maybe_compile_model(
-    model: nn.Module, config: TrainConfig, device: torch.device
-) -> nn.Module:
+def maybe_compile_model(model: nn.Module, config: TrainConfig, device: torch.device) -> nn.Module:
     if not config.use_compile or device.type != "cuda" or not hasattr(torch, "compile"):
         return model
     try:
@@ -455,7 +420,6 @@ def train_one_epoch(
     use_autocast = device.type == "cuda"
     use_scaler   = scaler is not None and scaler.is_enabled()
     accum_steps  = max(1, config.grad_accum_steps)
-
     optimizer.zero_grad(set_to_none=True)
 
     for step, batch in enumerate(loader, start=1):
@@ -471,17 +435,14 @@ def train_one_epoch(
                 goal_loss  = goal_classification_loss(probs, goals, gt)
                 loss       = traj_loss + config.goal_loss_weight * goal_loss
                 scaled     = loss / accum_steps
-
             if not torch.isfinite(loss):
                 print(f"  epoch={epoch+1}/{total_epochs} step={step} non-finite loss — skipping")
                 optimizer.zero_grad(set_to_none=True)
                 continue
-
             if use_scaler:
                 scaler.scale(scaled).backward()
             else:
                 scaled.backward()
-
         except torch.OutOfMemoryError:
             print(f"  epoch={epoch+1}/{total_epochs} step={step} OOM — skipping batch")
             optimizer.zero_grad(set_to_none=True)
@@ -515,8 +476,7 @@ def train_one_epoch(
             print(
                 f"  epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} "
                 f"loss={loss.item():.4f} traj={traj_loss.item():.4f} goal={goal_loss.item():.4f} "
-                f"ade={ade.item():.4f} fde={fde.item():.4f} "
-                f"sps={sps:.1f} mem={mem_gb:.2f}GB"
+                f"ade={ade.item():.4f} fde={fde.item():.4f} sps={sps:.1f} mem={mem_gb:.2f}GB"
             )
 
     if steps == 0:
@@ -535,13 +495,11 @@ def evaluate(
     model.eval()
     running = {"loss": 0.0, "traj_loss": 0.0, "goal_loss": 0.0, "ade": 0.0, "fde": 0.0}
     steps = 0
-
     for step, batch in enumerate(loader, start=1):
         x            = batch["x"].to(device, non_blocking=True)
         positions    = batch["positions"].to(device, non_blocking=True)
         gt           = batch["future"].to(device, non_blocking=True)
         map_features = batch["map"].to(device, non_blocking=True)
-
         try:
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=(device.type == "cuda")):
                 traj, goals, probs = model(x, positions, map_features)
@@ -553,40 +511,33 @@ def evaluate(
             if config.empty_cache_on_oom:
                 maybe_empty_cuda_cache(device, "eval_oom")
             continue
-
         if not torch.isfinite(loss):
             continue
-
         running["loss"]      += float(loss.item())
         running["traj_loss"] += float(traj_loss.item())
         running["goal_loss"] += float(goal_loss.item())
         running["ade"]       += float(ade.item())
         running["fde"]       += float(fde.item())
         steps += 1
-
     if steps == 0:
         raise RuntimeError("Validation produced no finite batches.")
     return {k: v / steps for k, v in running.items()}
 
 
 def train() -> None:
-    """Train on nuScenes trainval — RTX 5090 (Blackwell) + EPYC 64-core + 161 GB RAM."""
-
     config = TrainConfig()
     set_seed(config.seed)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     configure_runtime(device)
 
     print("=" * 70)
-    print("nuScenes trainval  ·  RTX 5090 (Blackwell)  ·  embed_dim=512")
+    print("nuScenes trainval  ·  RTX 5090 (Blackwell)  ·  embed_dim=896")
     print("=" * 70)
     print(f"device={device}")
     if device.type == "cuda":
         props = torch.cuda.get_device_properties(0)
         print(f"gpu={props.name}  vram={props.total_memory/1024**3:.1f}GB")
     print(f"dataset_root={config.dataset_root!r}  version={config.version}")
-    print(f"dataset_limit={config.dataset_limit}  repeat={config.train_repeat_factor}")
 
     train_dataset, val_dataset = build_datasets(config)
     pin_memory = device.type == "cuda"
@@ -604,16 +555,14 @@ def train() -> None:
         pin_memory_device=config.pin_memory_device,
     )
 
-    model     = TrajectoryPredictor().to(device)
-    total_p   = sum(p.numel() for p in model.parameters())
+    model   = TrajectoryPredictor().to(device)
+    total_p = sum(p.numel() for p in model.parameters())
     print(f"total_params={total_p:,}  (~{total_p/1e6:.0f}M)  embed={EMBED}  goals={NUM_GOALS}")
 
     optimizer = build_optimizer(model, config, device)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5, min_lr=config.min_learning_rate,
     )
-
-    # bfloat16 on Blackwell — no GradScaler needed (bf16 doesn't underflow like fp16)
     amp_dtype = torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16
     scaler: Optional[torch.amp.GradScaler] = (
         torch.amp.GradScaler("cuda", enabled=(amp_dtype == torch.float16))
@@ -641,7 +590,6 @@ def train() -> None:
     print(f"training epochs {start_epoch+1}→{total_epochs}  checkpoints→{checkpoint_dir}\n")
 
     total_start = time.time()
-
     for epoch in range(start_epoch, total_epochs):
         epoch_start = time.time()
         if device.type == "cuda":
@@ -652,7 +600,6 @@ def train() -> None:
             device, amp_dtype, config, epoch, total_epochs,
         )
         global_step += step_inc
-
         val_metrics = evaluate(model, val_loader, device, amp_dtype, config)
         scheduler.step(val_metrics["loss"])
 
