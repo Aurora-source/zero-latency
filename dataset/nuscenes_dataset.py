@@ -1,4 +1,4 @@
-"""Minimal nuScenes mini dataset loader for trajectory prediction."""
+"""Minimal nuScenes dataset loader for trajectory prediction."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ __all__ = ["NuScenesDataset"]
 
 
 class NuScenesDataset(Dataset[Dict[str, Tensor]]):
-    """Minimal scene-level nuScenes mini dataset for trajectory prediction.
+    """Minimal scene-level nuScenes dataset for trajectory prediction.
 
     Each dataset item corresponds to one nuScenes sample token. Up to
     ``max_agents`` annotated agents with sufficient history and future context are
@@ -41,7 +41,11 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
     - ``map``: dummy zero tensor for downstream compatibility.
 
     Coordinates are normalized into the current ego frame of the sample.
+
+    Supported versions: v1.0-mini, v1.0-trainval, v1.0-test
     """
+
+    SUPPORTED_VERSIONS = {"v1.0-mini", "v1.0-trainval", "v1.0-test"}
 
     def __init__(
         self,
@@ -62,8 +66,12 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
                 "nuscenes-devkit is required to use NuScenesDataset. "
                 "Install it with `pip install nuscenes-devkit`."
             ) from _NUSCENES_IMPORT_ERROR
-        if version != "v1.0-mini":
-            raise ValueError("NuScenesDataset currently supports only version='v1.0-mini'.")
+
+        if version not in self.SUPPORTED_VERSIONS:
+            raise ValueError(
+                f"Unsupported version '{version}'. "
+                f"Supported versions: {sorted(self.SUPPORTED_VERSIONS)}"
+            )
         if past_steps < 2:
             raise ValueError("past_steps must be at least 2.")
         if future_steps <= 0:
@@ -85,7 +93,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         self.dummy_map_elements = dummy_map_elements
 
         self.nusc = NuScenes(
-            version="v1.0-mini",
+            version=self.version,        # â† was hardcoded "v1.0-mini", now uses self.version
             dataroot=self.dataroot,
             verbose=verbose,
         )
@@ -96,7 +104,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         if not self.entries:
             raise RuntimeError(
                 "No nuScenes samples were indexed. Check that the dataset exists at "
-                f"{self.dataroot}."
+                f"{self.dataroot!r} with version {self.version!r}."
             )
 
     def __len__(self) -> int:
@@ -304,6 +312,12 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
 
 
 if __name__ == "__main__":
-    dataset = NuScenesDataset(dataroot="data/raw/nuscenes", version="v1.0-mini", verbose=True)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataroot", default="data/raw/nuscenes")
+    parser.add_argument("--version", default="v1.0-mini", choices=sorted(NuScenesDataset.SUPPORTED_VERSIONS))
+    args = parser.parse_args()
+    dataset = NuScenesDataset(dataroot=args.dataroot, version=args.version, verbose=True)
+    print(f"Dataset loaded: {len(dataset)} samples")
     sample = dataset[0]
     print({key: tuple(value.shape) for key, value in sample.items()})
