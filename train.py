@@ -39,7 +39,7 @@ class TrainConfig:
     version: str       = "v1.0-mini"
     checkpoint_dir: str = os.getenv("CHECKPOINT_DIR", "checkpoints")
     dataset_limit: int = int(os.getenv("DATASET_LIMIT", "404"))
-    run_epochs: int    = int(os.getenv("RUN_EPOCHS", "10"))        # was 30
+    run_epochs: int    = int(os.getenv("RUN_EPOCHS", "15"))        # was 30
     batch_size: int    = int(os.getenv("BATCH_SIZE", "2"))
     eval_batch_size: int = int(os.getenv("EVAL_BATCH_SIZE", "2"))
     grad_accum_steps: int = int(os.getenv("GRAD_ACCUM_STEPS", "8"))
