@@ -48,7 +48,7 @@ zero-latency/
 
 ---
 
-## Quick Start — Local (Windows, RTX 5070 Laptop)
+## Quick Start — Local (Windows, 8GB VRAM)
 
 ### 1. Clone and install
 
