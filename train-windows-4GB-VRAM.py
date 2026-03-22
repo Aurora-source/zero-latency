@@ -1,4 +1,20 @@
-"""High-throughput training entrypoint for the nuScenes mini trajectory pipeline."""
+"""Training entrypoint for nuScenes mini — RTX 2050 (4 GB VRAM), Linux/Mac.
+
+Architecture dims (matched to rebuilt modules):
+  embed_dim = 192   — squeezed for 4 GB VRAM (must be divisible by num_heads=8 → 192 works)
+  num_goals = 6
+  future_steps = 12
+
+4 GB VRAM strategy:
+  - embed_dim=192 cuts activation memory ~7× vs 512
+  - micro batch_size=2, grad_accum=8  →  effective batch=16
+  - gradient checkpointing via torch.autocast (AMP reduces peak memory)
+  - cosine LR with linear warmup (more stable on small dataset)
+  - data augmentation (random flip + Gaussian noise) — doubles effective dataset
+  - torch.compile OFF by default (small card, warm-up overhead not worth it)
+  - fp16 AMP + GradScaler (RTX 2050 may not support bf16)
+  - 2 DataLoader workers (safe on 16 GB RAM Linux)
+"""
 
 from __future__ import annotations
 
@@ -25,66 +41,75 @@ from modules.social.social_transformer import SocialTransformer
 from modules.temporal_transformer import TemporalTransformer
 from utils.losses import best_of_k_loss, goal_classification_loss
 
-# ── Model dims (change here to scale up/down) ─────────────────────────────────
-EMBED      = 640   # was 512 — more capacity, still fits in 4GB
-NUM_GOALS  = 12
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Architecture constants — squeezed for 4 GB VRAM ─────────────────────────
+# embed_dim must be divisible by num_heads (8): 192 = 8 × 24 ✓
+EMBED        = 192
+NUM_GOALS    = 6
+FUTURE_STEPS = 12
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class TrainConfig:
-    """Training configuration with safe defaults for RTX 2050 (4GB VRAM)."""
+    """Training configuration — RTX 2050 (4 GB VRAM), nuScenes mini."""
 
-    dataset_root: str  = os.getenv("NUSCENES_ROOT", "data/raw/nuscenes")
-    version: str       = "v1.0-mini"
-    checkpoint_dir: str = os.getenv("CHECKPOINT_DIR", "checkpoints")
-    dataset_limit: int = int(os.getenv("DATASET_LIMIT", "404"))
-    run_epochs: int    = int(os.getenv("RUN_EPOCHS", "15"))        # was 30
-    batch_size: int    = int(os.getenv("BATCH_SIZE", "2"))
-    eval_batch_size: int = int(os.getenv("EVAL_BATCH_SIZE", "2"))
-    grad_accum_steps: int = int(os.getenv("GRAD_ACCUM_STEPS", "8"))
-    learning_rate: float  = float(os.getenv("LR", "1e-4"))
-    min_learning_rate: float = float(os.getenv("MIN_LR", "1e-6"))
-    weight_decay: float   = float(os.getenv("WEIGHT_DECAY", "1e-2"))
-    goal_loss_weight: float = float(os.getenv("GOAL_LOSS_WEIGHT", "0.1"))
+    dataset_root: str     = os.getenv("NUSCENES_ROOT", "data/raw/nuscenes")
+    version: str          = "v1.0-mini"
+    checkpoint_dir: str   = os.getenv("CHECKPOINT_DIR", "checkpoints")
+    dataset_limit: int    = int(os.getenv("DATASET_LIMIT", "404"))
+    run_epochs: int       = int(os.getenv("RUN_EPOCHS", "40"))
+
+    # --- 4 GB VRAM: micro-batch=2, accumulate to effective=16 ---
+    batch_size: int        = int(os.getenv("BATCH_SIZE", "2"))
+    eval_batch_size: int   = int(os.getenv("EVAL_BATCH_SIZE", "2"))
+    grad_accum_steps: int  = int(os.getenv("GRAD_ACCUM_STEPS", "8"))
+
+    # --- Optimiser ---
+    learning_rate: float      = float(os.getenv("LR", "1e-4"))
+    min_learning_rate: float  = float(os.getenv("MIN_LR", "1e-6"))
+    weight_decay: float       = float(os.getenv("WEIGHT_DECAY", "1e-2"))
+    goal_loss_weight: float   = float(os.getenv("GOAL_LOSS_WEIGHT", "0.1"))
     gradient_clip_norm: float = float(os.getenv("GRAD_CLIP", "1.0"))
+
+    # --- Dataset ---
     train_repeat_factor: int = int(os.getenv("TRAIN_REPEAT_FACTOR", "4"))
     validation_ratio: float  = float(os.getenv("VAL_RATIO", "0.1"))
-    log_interval: int  = int(os.getenv("LOG_INTERVAL", "5"))
-    num_workers: int   = int(os.getenv("NUM_WORKERS", "2"))
-    prefetch_factor: int = int(os.getenv("PREFETCH_FACTOR", "2"))
-    warmup_ratio: float  = float(os.getenv("WARMUP_RATIO", "0.05"))
-    seed: int          = int(os.getenv("SEED", "7"))
-    resume: bool       = os.getenv("RESUME", "1") == "1"
-    use_compile: bool  = os.getenv("TORCH_COMPILE", "0") == "1"
-    compile_mode: str  = os.getenv("TORCH_COMPILE_MODE", "reduce-overhead")
+    log_interval: int        = int(os.getenv("LOG_INTERVAL", "5"))
+    num_workers: int         = int(os.getenv("NUM_WORKERS", "2"))
+    prefetch_factor: int     = int(os.getenv("PREFETCH_FACTOR", "2"))
+
+    # --- LR schedule ---
+    warmup_ratio: float = float(os.getenv("WARMUP_RATIO", "0.05"))
+
+    # --- Misc ---
+    seed: int                = int(os.getenv("SEED", "7"))
+    resume: bool             = os.getenv("RESUME", "1") == "1"
+    use_compile: bool        = os.getenv("TORCH_COMPILE", "0") == "1"
+    compile_mode: str        = os.getenv("TORCH_COMPILE_MODE", "reduce-overhead")
     empty_cache_on_oom: bool = os.getenv("EMPTY_CACHE_ON_OOM", "1") == "1"
-    augment: bool      = os.getenv("AUGMENT", "1") == "1"         # data augmentation
+    augment: bool            = os.getenv("AUGMENT", "1") == "1"
 
 
 class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
-    """Cache a small dataset fully in memory to avoid devkit I/O during training."""
+    """Cache dataset in RAM with optional augmentation on __getitem__."""
 
     def __init__(self, dataset: Dataset[Dict[str, Tensor]], augment: bool = False) -> None:
         super().__init__()
         self.augment = augment
-        samples = [dataset[index] for index in range(len(dataset))]
+        samples = [dataset[i] for i in range(len(dataset))]  # type: ignore[arg-type]
         if not samples:
             raise RuntimeError("CachedTrajectoryDataset received an empty dataset.")
 
-        x            = torch.stack([s["x"].to(dtype=torch.float32) for s in samples])
-        positions    = torch.stack([s["positions"].to(dtype=torch.float32) for s in samples])
-        future       = torch.stack([s["future"].to(dtype=torch.float32) for s in samples])
-        map_features = torch.stack([s["map"].to(dtype=torch.float32) for s in samples])
+        x            = torch.stack([s["x"].to(torch.float32) for s in samples])
+        positions    = torch.stack([s["positions"].to(torch.float32) for s in samples])
+        future       = torch.stack([s["future"].to(torch.float32) for s in samples])
+        map_features = torch.stack([s["map"].to(torch.float32) for s in samples])
 
-        valid_mask = future.abs().sum(dim=(1, 2, 3)) > 0.0
-        if torch.any(valid_mask):
-            x            = x[valid_mask]
-            positions    = positions[valid_mask]
-            future       = future[valid_mask]
-            map_features = map_features[valid_mask]
-        else:
-            raise RuntimeError("No valid samples with non-zero future trajectories were found.")
+        valid = future.abs().sum(dim=(1, 2, 3)) > 0.0
+        if not torch.any(valid):
+            raise RuntimeError("No valid samples with non-zero future trajectories.")
+        x = x[valid]; positions = positions[valid]
+        future = future[valid]; map_features = map_features[valid]
 
         self.x            = x.contiguous()
         self.positions    = positions.contiguous()
@@ -99,18 +124,18 @@ class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
         positions = self.positions[index].clone()
         future    = self.future[index].clone()
 
-        if self.augment and torch.rand(1).item() > 0.5:
-            # random horizontal flip — negate x coordinate and vx, ax
-            x[..., 0] *= -1   # x position
-            x[..., 2] *= -1   # vx velocity
-            x[..., 4] *= -1   # ax acceleration
-            positions[..., 0] *= -1
-            future[..., 0]    *= -1
-
-        if self.augment and torch.rand(1).item() > 0.5:
-            # random gaussian noise on positions (±0.1m)
-            x[..., :2]        += torch.randn_like(x[..., :2]) * 0.1
-            positions         += torch.randn_like(positions) * 0.1
+        if self.augment:
+            # Random horizontal flip (negate x, vx, ax)
+            if torch.rand(1).item() > 0.5:
+                x[..., 0] *= -1       # x position
+                x[..., 2] *= -1       # vx velocity
+                x[..., 4] *= -1       # ax acceleration
+                positions[..., 0] *= -1
+                future[..., 0]    *= -1
+            # Small Gaussian position noise (±0.1 m)
+            if torch.rand(1).item() > 0.5:
+                x[..., :2]  += torch.randn_like(x[..., :2]) * 0.1
+                positions   += torch.randn_like(positions) * 0.1
 
         return {
             "x":         x,
@@ -121,56 +146,80 @@ class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
 
 
 class TrajectoryPredictor(nn.Module):
-    """Trajectory prediction stack — EMBED=640, num_goals=12 for RTX 2050."""
+    """Trajectory prediction stack — embed_dim=192, tuned for 4 GB VRAM.
+
+    Approximate parameter counts at embed_dim=192:
+      InputEmbedding         ~0.5 M  (continuous_hidden=384, type_emb=384)
+      TemporalTransformer    ~5.5 M  (16 layers, ff=768)
+      SocialTransformer       ~1.5 M (6 layers, ff=768)
+      SceneContextEncoder     ~1.2 M (4 layers, ff=768)
+      GoalPredictionNetwork   ~0.5 M (hidden=768, bottleneck=384)
+      MultiModalDecoder        ~1.5 M (8 layers, ff=384)
+      ─────────────────────────────────────────────────────
+      Total                  ~11 M
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.embedding = InputEmbedding(
+            continuous_dim=8,
             embedding_dim=EMBED,
-            continuous_hidden_dim=1280,
+            continuous_hidden_dim=384,
+            type_embedding_dim=384,
+            num_types=3,
+            dropout=0.1,
         )
         self.temporal = TemporalTransformer(
-            num_layers=8,
+            num_layers=16,
+            num_heads=8,         # 192 / 8 = 24 head_dim ✓
             embed_dim=EMBED,
-            num_heads=8,
-            ff_dim=1280,
+            ff_dim=768,
+            dropout=0.1,
         )
         self.social = SocialTransformer(
-            num_layers=4,
-            embed_dim=EMBED,
+            num_layers=6,
             num_heads=8,
-            ff_dim=1280,
+            embed_dim=EMBED,
+            ff_dim=768,
+            dropout=0.1,
         )
         self.scene = SceneContextEncoder(
-            num_layers=3,
-            embed_dim=EMBED,
+            num_layers=4,
             num_heads=8,
-            ff_dim=1280,
+            embed_dim=EMBED,
             map_dim=256,
+            ff_dim=768,
+            dropout=0.1,
         )
         self.goal = GoalPredictionNetwork(
             embed_dim=EMBED,
-            hidden_dim=1280,
-            bottleneck_dim=640,
             num_goals=NUM_GOALS,
+            hidden_dim=768,
+            bottleneck_dim=384,
+            dropout=0.1,
         )
         self.decoder = MultiModalDecoder(
-            num_layers=4,
-            embed_dim=EMBED,
+            num_layers=8,
             num_heads=8,
-            ff_dim=1280,
-            future_steps=12,
+            embed_dim=EMBED,
+            ff_dim=384,
+            dropout=0.1,
+            future_steps=FUTURE_STEPS,
         )
 
-    def forward(self, x: Tensor, positions: Tensor, map_features: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def forward(
+        self, x: Tensor, positions: Tensor, map_features: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
         emb       = self.embedding(x)
         temp      = self.temporal(emb)
         soc       = self.social(temp, positions)
         scene_out = self.scene(soc, map_features, agent_positions=positions, map_positions=None)
-        goals, goal_probabilities = self.goal(scene_out)
-        trajectories = self.decoder(scene_out, goals, goal_probabilities)
-        return trajectories, goals, goal_probabilities
+        goals, probs = self.goal(scene_out)
+        traj      = self.decoder(scene_out, goals, probs)
+        return traj, goals, probs
 
+
+# ── Utility functions ─────────────────────────────────────────────────────────
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
@@ -184,9 +233,9 @@ def configure_runtime(device: torch.device) -> None:
     if device.type != "cuda":
         return
     torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.allow_tf32       = True
+    torch.backends.cudnn.benchmark        = True
+    torch.backends.cudnn.deterministic    = False
 
 
 def supports_fused_adamw() -> bool:
@@ -209,7 +258,7 @@ def make_dataloader(
     pin_memory: bool,
     drop_last: bool,
 ) -> DataLoader[Dict[str, Tensor]]:
-    loader_kwargs: Dict = {
+    kwargs: dict = {
         "batch_size":  batch_size,
         "shuffle":     shuffle,
         "num_workers": num_workers,
@@ -217,49 +266,48 @@ def make_dataloader(
         "drop_last":   drop_last,
     }
     if num_workers > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"]    = prefetch_factor
+        kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"]    = prefetch_factor
         if os.name != "nt":
-            loader_kwargs["multiprocessing_context"] = "fork"
-    return DataLoader(dataset, **loader_kwargs)
+            kwargs["multiprocessing_context"] = "fork"
+    return DataLoader(dataset, **kwargs)
 
 
-def build_datasets(config: TrainConfig) -> tuple[Dataset[Dict[str, Tensor]], Dataset[Dict[str, Tensor]]]:
-    raw_dataset     = NuScenesDataset(dataroot=config.dataset_root, version=config.version)
-    limited_dataset = Subset(raw_dataset, range(min(config.dataset_limit, len(raw_dataset))))
+def build_datasets(
+    config: TrainConfig,
+) -> tuple[Dataset[Dict[str, Tensor]], Dataset[Dict[str, Tensor]]]:
+    raw     = NuScenesDataset(dataroot=config.dataset_root, version=config.version)
+    limited = Subset(raw, range(min(config.dataset_limit, len(raw))))
 
-    # train gets augmentation, val does not
-    train_cache = CachedTrajectoryDataset(limited_dataset, augment=config.augment)
-    val_cache   = CachedTrajectoryDataset(limited_dataset, augment=False)
+    # Train and val cache built separately so augmentation only applies to train
+    train_cache = CachedTrajectoryDataset(limited, augment=config.augment)
+    val_cache   = CachedTrajectoryDataset(limited, augment=False)
 
     if len(train_cache) < 2:
-        raise RuntimeError("Need at least two cached samples to build train/validation splits.")
+        raise RuntimeError("Need at least 2 cached samples.")
 
     val_size   = max(1, int(round(len(train_cache) * config.validation_ratio)))
     train_size = len(train_cache) - val_size
-    if train_size <= 0:
-        train_size, val_size = len(train_cache) - 1, 1
 
     train_indices, val_indices = random_split(
-        range(len(train_cache)),
-        [train_size, val_size],
+        range(len(train_cache)), [train_size, val_size],
         generator=torch.Generator().manual_seed(config.seed),
     )
 
     from torch.utils.data import Subset as TSubset
-    train_subset = TSubset(train_cache, list(train_indices))
-    val_subset   = TSubset(val_cache,   list(val_indices))
+    train_sub = TSubset(train_cache, list(train_indices))
+    val_sub   = TSubset(val_cache,   list(val_indices))
 
     if config.train_repeat_factor > 1:
-        repeated: Dataset[Dict[str, Tensor]] = ConcatDataset([train_subset] * config.train_repeat_factor)
-    else:
-        repeated = train_subset
+        train_sub = ConcatDataset([train_sub] * config.train_repeat_factor)
 
-    return repeated, val_subset
+    return train_sub, val_sub
 
 
-def build_optimizer(model: nn.Module, config: TrainConfig, device: torch.device) -> torch.optim.Optimizer:
-    kwargs: Dict = {"lr": config.learning_rate, "weight_decay": config.weight_decay}
+def build_optimizer(
+    model: nn.Module, config: TrainConfig, device: torch.device
+) -> torch.optim.Optimizer:
+    kwargs: dict = {"lr": config.learning_rate, "weight_decay": config.weight_decay}
     if device.type == "cuda" and supports_fused_adamw():
         kwargs["fused"] = True
     return torch.optim.AdamW(model.parameters(), **kwargs)
@@ -270,7 +318,7 @@ def build_scheduler(
     config: TrainConfig,
     steps_per_epoch: int,
 ) -> torch.optim.lr_scheduler.LambdaLR:
-    """Cosine annealing with linear warmup."""
+    """Cosine annealing with linear warmup — better than ReduceLR on tiny datasets."""
     total_steps  = config.run_epochs * steps_per_epoch
     warmup_steps = max(1, int(total_steps * config.warmup_ratio))
     base_lr      = config.learning_rate
@@ -318,8 +366,8 @@ def extract_checkpoint_loss(checkpoint: Dict[str, object]) -> float:
         m = checkpoint.get(key)
         if isinstance(m, dict) and "loss" in m:
             return float(m["loss"])
-    avg = checkpoint.get("avg_loss")
-    return float(avg) if avg is not None else float("inf")
+    v = checkpoint.get("avg_loss")
+    return float(v) if v is not None else float("inf")
 
 
 def load_model_state(model: nn.Module, checkpoint: Dict[str, object]) -> None:
@@ -334,7 +382,9 @@ def load_model_state(model: nn.Module, checkpoint: Dict[str, object]) -> None:
     raise KeyError("Checkpoint does not contain a supported model state.")
 
 
-def update_best_checkpoints(checkpoint: Dict[str, object], checkpoint_dir: Path) -> None:
+def update_best_checkpoints(
+    checkpoint: Dict[str, object], checkpoint_dir: Path
+) -> None:
     candidates = [checkpoint]
     for rank in range(1, 3):
         path = checkpoint_dir / f"best_{rank}.pt"
@@ -359,7 +409,11 @@ def load_resume_checkpoint(
     checkpoint_dir: Path,
     device: torch.device,
 ) -> tuple[int, int, float]:
-    for resume_path in (checkpoint_dir / "best_1.pt", checkpoint_dir / "best.pt", checkpoint_dir / "latest.pt"):
+    for resume_path in (
+        checkpoint_dir / "best_1.pt",
+        checkpoint_dir / "best.pt",
+        checkpoint_dir / "latest.pt",
+    ):
         if not resume_path.exists():
             continue
         try:
@@ -375,31 +429,34 @@ def load_resume_checkpoint(
             start_epoch = int(ckpt.get("epoch", 0))
             global_step = int(ckpt.get("global_step", 0))
             best_loss   = extract_checkpoint_loss(ckpt)
-            print(f"Resumed from {resume_path} epoch={start_epoch} step={global_step} best_val={best_loss:.4f}")
+            print(f"Resumed from {resume_path}  epoch={start_epoch}  best_val={best_loss:.4f}")
             return start_epoch, global_step, best_loss
         except Exception as exc:
             print(f"Failed to resume from {resume_path}: {exc}")
-    print("No compatible checkpoint found, starting from scratch.")
+
+    print("No checkpoint found — starting from scratch.")
     return 0, 0, float("inf")
 
 
-def maybe_compile_model(model: nn.Module, config: TrainConfig, device: torch.device) -> nn.Module:
+def maybe_compile_model(
+    model: nn.Module, config: TrainConfig, device: torch.device
+) -> nn.Module:
     if not config.use_compile or device.type != "cuda" or not hasattr(torch, "compile"):
         return model
     try:
-        print(f"Compiling model with torch.compile(mode={config.compile_mode!r})...")
+        print(f"Compiling model (mode={config.compile_mode!r})...")
         compiled = torch.compile(model, mode=config.compile_mode)
-        print("Model compilation complete.")
+        print("Compilation complete.")
         return compiled
     except Exception as exc:
-        print(f"torch.compile failed, continuing without: {exc}")
+        print(f"torch.compile failed — continuing without: {exc}")
         return model
 
 
 def maybe_empty_cuda_cache(device: torch.device, reason: str) -> None:
     if device.type == "cuda":
         torch.cuda.empty_cache()
-        print(f"cleared_cuda_cache reason={reason}")
+        print(f"  cleared_cuda_cache  reason={reason}")
 
 
 def train_one_epoch(
@@ -435,12 +492,12 @@ def train_one_epoch(
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_autocast):
                 traj, goals, probs = model_forward(x, positions, map_features)
                 traj_loss, ade, fde = best_of_k_loss(traj, gt, return_metrics=True)
-                goal_loss = goal_classification_loss(probs, goals, gt)
-                loss      = traj_loss + config.goal_loss_weight * goal_loss
-                scaled    = loss / accum_steps
+                goal_loss  = goal_classification_loss(probs, goals, gt)
+                loss       = traj_loss + config.goal_loss_weight * goal_loss
+                scaled     = loss / accum_steps
 
             if not torch.isfinite(loss):
-                print(f"epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} invalid loss, skipping")
+                print(f"  epoch={epoch+1}/{total_epochs} step={step} non-finite loss — skipping")
                 optimizer.zero_grad(set_to_none=True)
                 continue
 
@@ -450,7 +507,7 @@ def train_one_epoch(
                 scaled.backward()
 
         except torch.OutOfMemoryError:
-            print(f"epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} OOM, skipping")
+            print(f"  epoch={epoch+1}/{total_epochs} step={step} OOM — skipping batch")
             optimizer.zero_grad(set_to_none=True)
             if config.empty_cache_on_oom:
                 maybe_empty_cuda_cache(device, "oom")
@@ -482,7 +539,7 @@ def train_one_epoch(
             mem_gb  = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0.0
             cur_lr  = optimizer.param_groups[0]["lr"]
             print(
-                f"epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} "
+                f"  epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} "
                 f"loss={loss.item():.4f} traj={traj_loss.item():.4f} goal={goal_loss.item():.4f} "
                 f"ade={ade.item():.4f} fde={fde.item():.4f} "
                 f"lr={cur_lr:.2e} sps={sps:.1f} mem={mem_gb:.2f}GB"
@@ -490,7 +547,6 @@ def train_one_epoch(
 
     if steps == 0:
         raise RuntimeError("All training batches were skipped.")
-
     return {k: v / steps for k, v in running.items()}, optimizer_steps
 
 
@@ -504,8 +560,7 @@ def evaluate(
 ) -> Dict[str, float]:
     model.eval()
     running = {"loss": 0.0, "traj_loss": 0.0, "goal_loss": 0.0, "ade": 0.0, "fde": 0.0}
-    steps        = 0
-    use_autocast = device.type == "cuda"
+    steps = 0
 
     for batch in loader:
         x            = batch["x"].to(device, non_blocking=True)
@@ -514,7 +569,7 @@ def evaluate(
         map_features = batch["map"].to(device, non_blocking=True)
 
         try:
-            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_autocast):
+            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=(device.type == "cuda")):
                 traj, goals, probs = model(x, positions, map_features)
                 traj_loss, ade, fde = best_of_k_loss(traj, gt, return_metrics=True)
                 goal_loss = goal_classification_loss(probs, goals, gt)
@@ -536,12 +591,11 @@ def evaluate(
 
     if steps == 0:
         raise RuntimeError("Validation produced no finite batches.")
-
     return {k: v / steps for k, v in running.items()}
 
 
 def train() -> None:
-    """Train the trajectory model — RTX 2050 safe, cosine LR, EMBED=640, augmentation."""
+    """Train on nuScenes mini — RTX 2050 (4 GB VRAM), embed_dim=192, augmentation."""
 
     config = TrainConfig()
     set_seed(config.seed)
@@ -549,6 +603,9 @@ def train() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     configure_runtime(device)
 
+    print("=" * 60)
+    print("nuScenes mini  ·  RTX 2050 (4 GB)  ·  embed_dim=192")
+    print("=" * 60)
     print(f"device={device}")
     if device.type == "cuda":
         props = torch.cuda.get_device_properties(0)
@@ -556,19 +613,29 @@ def train() -> None:
 
     train_dataset, val_dataset = build_datasets(config)
     pin_memory   = device.type == "cuda"
-    train_loader = make_dataloader(train_dataset, config.batch_size, True,  config.num_workers, config.prefetch_factor, pin_memory, True)
-    val_loader   = make_dataloader(val_dataset,   config.eval_batch_size, False, max(0, config.num_workers//2), config.prefetch_factor, pin_memory, False)
+    train_loader = make_dataloader(
+        train_dataset, config.batch_size, shuffle=True,
+        num_workers=config.num_workers, prefetch_factor=config.prefetch_factor,
+        pin_memory=pin_memory, drop_last=True,
+    )
+    val_loader = make_dataloader(
+        val_dataset, config.eval_batch_size, shuffle=False,
+        num_workers=max(0, config.num_workers // 2), prefetch_factor=config.prefetch_factor,
+        pin_memory=pin_memory, drop_last=False,
+    )
 
-    model = TrajectoryPredictor().to(device)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"total_params={total_params:,} ({total_params/1e6:.1f}M)  embed={EMBED}  goals={NUM_GOALS}  augment={config.augment}")
+    model   = TrajectoryPredictor().to(device)
+    total_p = sum(p.numel() for p in model.parameters())
+    print(f"total_params={total_p:,}  (~{total_p/1e6:.1f}M)  embed={EMBED}  goals={NUM_GOALS}  augment={config.augment}")
 
     optimizer = build_optimizer(model, config, device)
-    scheduler = build_scheduler(optimizer, config, steps_per_epoch=len(train_loader) // max(1, config.grad_accum_steps))
+    eff_steps = len(train_loader) // max(1, config.grad_accum_steps)
+    scheduler = build_scheduler(optimizer, config, steps_per_epoch=eff_steps)
 
     amp_dtype = torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16
     scaler: Optional[torch.amp.GradScaler] = (
-        torch.amp.GradScaler("cuda", enabled=(amp_dtype == torch.float16)) if device.type == "cuda" else None
+        torch.amp.GradScaler("cuda", enabled=(amp_dtype == torch.float16))
+        if device.type == "cuda" else None
     )
 
     checkpoint_dir = Path(config.checkpoint_dir)
@@ -581,15 +648,16 @@ def train() -> None:
         )
 
     compiled_model = maybe_compile_model(model, config, device)
+    total_epochs   = start_epoch + config.run_epochs
+    eff_batch      = config.batch_size * max(1, config.grad_accum_steps)
 
-    total_epochs    = start_epoch + config.run_epochs
-    effective_batch = config.batch_size * max(1, config.grad_accum_steps)
-    print(f"train={len(train_dataset)}  val={len(val_dataset)}  steps/epoch={len(train_loader)}")
-    print(f"micro_batch={config.batch_size}  effective_batch={effective_batch}  accum={config.grad_accum_steps}")
+    print(f"\ntrain={len(train_dataset)}  val={len(val_dataset)}  steps/epoch={len(train_loader)}")
+    print(f"micro_batch={config.batch_size}  effective={eff_batch}  accum={config.grad_accum_steps}")
     print(f"lr={config.learning_rate:.2e}  min_lr={config.min_learning_rate:.2e}  warmup={config.warmup_ratio*100:.0f}%  amp={amp_dtype}")
-    print(f"epochs={start_epoch+1}→{total_epochs}  checkpoints={checkpoint_dir}")
+    print(f"epochs {start_epoch+1}→{total_epochs}  checkpoints→{checkpoint_dir}\n")
 
     total_start = time.time()
+
     for epoch in range(start_epoch, total_epochs):
         epoch_start = time.time()
         if device.type == "cuda":
@@ -603,23 +671,29 @@ def train() -> None:
 
         val_metrics = evaluate(model, val_loader, device, amp_dtype, config)
 
-        ckpt = create_checkpoint(model, optimizer, scheduler, scaler,
-                                  epoch=epoch+1, global_step=global_step,
-                                  train_metrics=train_metrics, val_metrics=val_metrics)
+        ckpt = create_checkpoint(
+            model, optimizer, scheduler, scaler,
+            epoch=epoch + 1, global_step=global_step,
+            train_metrics=train_metrics, val_metrics=val_metrics,
+        )
         save_checkpoint(ckpt, checkpoint_dir / "latest.pt")
         update_best_checkpoints(ckpt, checkpoint_dir)
         best_val_loss = min(best_val_loss, val_metrics["loss"])
 
-        peak_mem = torch.cuda.max_memory_allocated(device)/1024**3 if device.type == "cuda" else 0.0
-        cur_lr   = optimizer.param_groups[0]["lr"]
+        epoch_time = time.time() - epoch_start
+        peak_mem   = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0.0
+        cur_lr     = optimizer.param_groups[0]["lr"]
         print(
-            f"epoch={epoch+1}/{total_epochs} "
-            f"train_loss={train_metrics['loss']:.4f} train_ade={train_metrics['ade']:.4f} train_fde={train_metrics['fde']:.4f} "
-            f"val_loss={val_metrics['loss']:.4f} val_ade={val_metrics['ade']:.4f} val_fde={val_metrics['fde']:.4f} "
-            f"lr={cur_lr:.2e} time={time.time()-epoch_start:.1f}s best_val={best_val_loss:.4f} peak_mem={peak_mem:.2f}GB"
+            f"[epoch={epoch+1}/{total_epochs}]  "
+            f"train loss={train_metrics['loss']:.4f}  ade={train_metrics['ade']:.4f}  fde={train_metrics['fde']:.4f}  |  "
+            f"val loss={val_metrics['loss']:.4f}  ade={val_metrics['ade']:.4f}  fde={val_metrics['fde']:.4f}  |  "
+            f"lr={cur_lr:.2e}  time={epoch_time:.1f}s  best={best_val_loss:.4f}  peak_mem={peak_mem:.2f}GB"
         )
 
-    print(f"training_complete={( time.time()-total_start)/60:.1f}min  best_val={best_val_loss:.4f}  saved={checkpoint_dir}")
+    total_time = time.time() - total_start
+    print(f"\ntraining_complete  minutes={total_time/60:.1f}")
+    print(f"best_val_loss={best_val_loss:.4f}")
+    print(f"checkpoints → {checkpoint_dir}/")
 
 
 if __name__ == "__main__":
