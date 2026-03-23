@@ -2,3 +2,4 @@ discord-bots/
 dataset/v1.0-mini/
 __pycache__/
 *.pyc
+dataset/processed/
