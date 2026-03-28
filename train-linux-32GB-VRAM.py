@@ -1,5 +1,3 @@
-"""High-throughput training entrypoint for the nuScenes trainval trajectory pipeline."""
-
 from __future__ import annotations
 
 import inspect
@@ -32,45 +30,38 @@ from utils.losses import best_of_k_loss, goal_classification_loss
 
 @dataclass(frozen=True)
 class TrainConfig:
-    """Training configuration for RTX 5090 + AMD EPYC 64-core + 161GB RAM cloud training."""
 
-    # --- Dataset ---
     dataset_root: str   = os.getenv("NUSCENES_ROOT", "nuscenes")
     version: str        = os.getenv("NUSCENES_VERSION", "v1.0-trainval")
     checkpoint_dir: str = os.getenv("CHECKPOINT_DIR", "checkpoints")
-    dataset_limit: int  = int(os.getenv("DATASET_LIMIT", "6000"))       # parts 1+2 (~6K samples)
+    dataset_limit: int  = int(os.getenv("DATASET_LIMIT", "6000"))
     run_epochs: int     = int(os.getenv("RUN_EPOCHS", "40"))
 
-    # --- Batch / memory (RTX 5090 32GB VRAM) ---
-    batch_size: int        = int(os.getenv("BATCH_SIZE", "128"))         # 161GB RAM — go bigger
+    batch_size: int        = int(os.getenv("BATCH_SIZE", "128"))
     eval_batch_size: int   = int(os.getenv("EVAL_BATCH_SIZE", "64"))
     grad_accum_steps: int  = int(os.getenv("GRAD_ACCUM_STEPS", "1"))
 
-    # --- Optimiser ---
     learning_rate: float   = float(os.getenv("LR", "5e-5"))
     min_learning_rate: float = float(os.getenv("MIN_LR", "1e-6"))
     weight_decay: float    = float(os.getenv("WEIGHT_DECAY", "1e-2"))
     goal_loss_weight: float = float(os.getenv("GOAL_LOSS_WEIGHT", "0.1"))
     gradient_clip_norm: float = float(os.getenv("GRAD_CLIP", "1.0"))
 
-    # --- Data loading (64-core EPYC — max out workers) ---
     train_repeat_factor: int = int(os.getenv("TRAIN_REPEAT_FACTOR", "1"))
     validation_ratio: float  = float(os.getenv("VAL_RATIO", "0.1"))
     log_interval: int        = int(os.getenv("LOG_INTERVAL", "10"))
-    num_workers: int         = int(os.getenv("NUM_WORKERS", "32"))       # 64 cores — use 32 workers
-    prefetch_factor: int     = int(os.getenv("PREFETCH_FACTOR", "6"))    # more prefetch with 161GB RAM
+    num_workers: int         = int(os.getenv("NUM_WORKERS", "32"))
+    prefetch_factor: int     = int(os.getenv("PREFETCH_FACTOR", "6"))
 
-    # --- Misc ---
     seed: int            = int(os.getenv("SEED", "7"))
     resume: bool         = os.getenv("RESUME", "1") == "1"
     use_compile: bool    = os.getenv("TORCH_COMPILE", "1") == "1"
     compile_mode: str    = os.getenv("TORCH_COMPILE_MODE", "max-autotune")
     empty_cache_on_oom: bool = os.getenv("EMPTY_CACHE_ON_OOM", "1") == "1"
-    pin_memory_device: str   = os.getenv("PIN_MEMORY_DEVICE", "")       # pin directly to GPU
+    pin_memory_device: str   = os.getenv("PIN_MEMORY_DEVICE", "")
 
 
 class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
-    """Cache dataset fully in memory — fast for datasets that fit in RAM."""
 
     def __init__(self, dataset: Dataset[Dict[str, Tensor]]) -> None:
         super().__init__()
@@ -110,7 +101,6 @@ class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
 
 
 class TrajectoryPredictor(nn.Module):
-    """Full trajectory prediction stack."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -130,7 +120,6 @@ class TrajectoryPredictor(nn.Module):
         traj         = self.decoder(scene_ctx, goals, probs)
         return traj, goals, probs
 
-
 def set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
@@ -140,17 +129,16 @@ def set_seed(seed: int) -> None:
 
 def configure_runtime(device: torch.device) -> None:
     torch.set_float32_matmul_precision("high")
-
-    # AMD EPYC 64-core — let PyTorch use more threads for CPU ops
     torch.set_num_threads(32)
     torch.set_num_interop_threads(8)
 
     if device.type != "cuda":
         return
+
     torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32       = True
-    torch.backends.cudnn.benchmark        = True
-    torch.backends.cudnn.deterministic    = False
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
 
 
 def supports_fused_adamw() -> bool:
@@ -173,33 +161,41 @@ def make_dataloader(
     pin_memory: bool,
     drop_last: bool,
 ) -> DataLoader[Dict[str, Tensor]]:
-    loader_kwargs: dict = {
-        "batch_size":  batch_size,
-        "shuffle":     shuffle,
+
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
         "num_workers": num_workers,
-        "pin_memory":  pin_memory,
-        "drop_last":   drop_last,
+        "pin_memory": pin_memory,
+        "drop_last": drop_last,
     }
+
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"]    = prefetch_factor
+        loader_kwargs["prefetch_factor"] = prefetch_factor
         if os.name != "nt":
             loader_kwargs["multiprocessing_context"] = "fork"
+
     return DataLoader(dataset, **loader_kwargs)
 
 
-def build_datasets(config: TrainConfig) -> tuple[Dataset[Dict[str, Tensor]], Dataset[Dict[str, Tensor]]]:
-    print(f"Loading {config.version} dataset from {config.dataset_root!r}...")
-    raw_dataset    = NuScenesDataset(dataroot=config.dataset_root, version=config.version)
-    print(f"  Total scenes indexed: {len(raw_dataset)} samples")
+def build_datasets(config: TrainConfig):
+    print(f"Loading {config.version} dataset from {config.dataset_root!r}")
 
-    limited        = Subset(raw_dataset, range(min(config.dataset_limit, len(raw_dataset))))
-    cached         = CachedTrajectoryDataset(limited)
+    raw_dataset = NuScenesDataset(
+        dataroot=config.dataset_root,
+        version=config.version,
+    )
+
+    print(f"Total samples: {len(raw_dataset)}")
+
+    limited = Subset(raw_dataset, range(min(config.dataset_limit, len(raw_dataset))))
+    cached = CachedTrajectoryDataset(limited)
 
     if len(cached) < 2:
-        raise RuntimeError("Need at least 2 cached samples.")
+        raise RuntimeError("too few samples")
 
-    val_size   = max(1, int(round(len(cached) * config.validation_ratio)))
+    val_size = max(1, int(round(len(cached) * config.validation_ratio)))
     train_size = len(cached) - val_size
 
     train_subset, val_subset = random_split(
@@ -214,189 +210,226 @@ def build_datasets(config: TrainConfig) -> tuple[Dataset[Dict[str, Tensor]], Dat
     return train_subset, val_subset
 
 
-def build_optimizer(model: nn.Module, config: TrainConfig, device: torch.device) -> torch.optim.Optimizer:
-    kwargs: dict = {"lr": config.learning_rate, "weight_decay": config.weight_decay}
+def build_optimizer(model: nn.Module, config: TrainConfig, device: torch.device):
+    kwargs = {
+        "lr": config.learning_rate,
+        "weight_decay": config.weight_decay,
+    }
+
     if device.type == "cuda" and supports_fused_adamw():
         kwargs["fused"] = True
+
     return torch.optim.AdamW(model.parameters(), **kwargs)
 
 
 def create_checkpoint(
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.ReduceLROnPlateau,
-    scaler: Optional[torch.amp.GradScaler],
-    epoch: int,
-    global_step: int,
-    train_metrics: Dict[str, float],
-    val_metrics: Dict[str, float],
-) -> Dict[str, object]:
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    epoch,
+    global_step,
+    train_metrics,
+    val_metrics,
+):
     return {
-        "epoch":         epoch,
-        "global_step":   global_step,
+        "epoch": epoch,
+        "global_step": global_step,
         "train_metrics": train_metrics,
-        "val_metrics":   val_metrics,
-        "model":         model.state_dict(),
-        "optimizer":     optimizer.state_dict(),
-        "scheduler":     scheduler.state_dict(),
-        "scaler":        scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
+        "val_metrics": val_metrics,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "scaler": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
     }
 
 
-def save_checkpoint(checkpoint: Dict[str, object], path: Path) -> None:
+def save_checkpoint(checkpoint, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(checkpoint, path)
 
 
-def extract_checkpoint_loss(checkpoint: Dict[str, object]) -> float:
+def extract_checkpoint_loss(checkpoint):
     val_metrics = checkpoint.get("val_metrics")
     if isinstance(val_metrics, dict) and "loss" in val_metrics:
         return float(val_metrics["loss"])
+
     train_metrics = checkpoint.get("train_metrics")
     if isinstance(train_metrics, dict) and "loss" in train_metrics:
         return float(train_metrics["loss"])
+
     avg_loss = checkpoint.get("avg_loss")
     if avg_loss is not None:
         return float(avg_loss)
+
     return float("inf")
 
 
-def load_model_state(model: nn.Module, checkpoint: Dict[str, object]) -> None:
+def load_model_state(model, checkpoint):
     if "model" in checkpoint:
         model.load_state_dict(checkpoint["model"])
         return
+
     legacy = ("embedding", "temporal", "social", "scene", "goal", "decoder")
+
     if all(name in checkpoint for name in legacy):
         for name in legacy:
             getattr(model, name).load_state_dict(checkpoint[name])
         return
-    raise KeyError("Checkpoint does not contain a supported model state.")
+
+    raise KeyError("invalid checkpoint")
 
 
-def update_best_checkpoints(checkpoint: Dict[str, object], checkpoint_dir: Path) -> None:
+def update_best_checkpoints(checkpoint, checkpoint_dir: Path):
     candidates = [checkpoint]
+
     for rank in range(1, 3):
         path = checkpoint_dir / f"best_{rank}.pt"
         if path.exists():
             candidates.append(torch.load(path, map_location="cpu"))
+
     candidates.sort(key=extract_checkpoint_loss)
     kept = candidates[:2]
+
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     for rank, item in enumerate(kept, start=1):
         save_checkpoint(item, checkpoint_dir / f"best_{rank}.pt")
+
     for rank in range(len(kept) + 1, 3):
         path = checkpoint_dir / f"best_{rank}.pt"
         if path.exists():
             path.unlink()
 
-
 def load_resume_checkpoint(
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.ReduceLROnPlateau,
-    scaler: Optional[torch.amp.GradScaler],
+    model,
+    optimizer,
+    scheduler,
+    scaler,
     checkpoint_dir: Path,
-    device: torch.device,
+    device,
     config: TrainConfig,
-) -> tuple[int, int, float]:
+):
     candidate_paths = (
         checkpoint_dir / "best_1.pt",
         checkpoint_dir / "best.pt",
         checkpoint_dir / "latest.pt",
     )
+
     for resume_path in candidate_paths:
         if not resume_path.exists():
             continue
+
         try:
             checkpoint = torch.load(resume_path, map_location=device)
+
             load_model_state(model, checkpoint)
+
             if "optimizer" in checkpoint:
                 optimizer.load_state_dict(checkpoint["optimizer"])
                 move_optimizer_state(optimizer, device)
+
             if "scheduler" in checkpoint:
                 scheduler.load_state_dict(checkpoint["scheduler"])
+
             if scaler is not None and scaler.is_enabled() and checkpoint.get("scaler") is not None:
                 scaler.load_state_dict(checkpoint["scaler"])
 
             start_epoch = int(checkpoint.get("epoch", 0))
             global_step = int(checkpoint.get("global_step", 0))
-            best_loss   = extract_checkpoint_loss(checkpoint)
+            best_loss = extract_checkpoint_loss(checkpoint)
 
-            # Keep LR from checkpoint, only reset if it's effectively zero
             current_lr = optimizer.param_groups[0]["lr"]
+
             if current_lr < config.min_learning_rate:
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = config.learning_rate
-                print(f"LR was zero, reset to {config.learning_rate:.2e}")
+                print(f"LR reset to {config.learning_rate:.2e}")
             else:
-                print(f"LR continuing at {current_lr:.2e}")
-            return start_epoch, global_step, best_loss
-        except Exception as exc:
-            print(f"Failed to resume from {resume_path}: {exc}")
+                print(f"LR={current_lr:.2e}")
 
-    print("No checkpoint found, starting from scratch.")
+            return start_epoch, global_step, best_loss
+
+        except Exception as exc:
+            print(f"resume failed: {exc}")
+
+    print("no checkpoint, starting fresh")
     return 0, 0, float("inf")
 
 
-def maybe_compile_model(model: nn.Module, config: TrainConfig, device: torch.device) -> nn.Module:
+def maybe_compile_model(model, config: TrainConfig, device):
     if not config.use_compile or device.type != "cuda" or not hasattr(torch, "compile"):
         return model
+
     try:
-        print(f"Compiling model (mode={config.compile_mode!r})...")
+        print(f"compile mode={config.compile_mode}")
         compiled = torch.compile(model, mode=config.compile_mode)
-        print("Compilation done.")
+        print("compiled")
         return compiled
     except Exception as exc:
-        print(f"torch.compile failed, continuing without: {exc}")
+        print(f"compile failed: {exc}")
         return model
 
 
-def maybe_empty_cuda_cache(device: torch.device, reason: str) -> None:
+def maybe_empty_cuda_cache(device, reason: str):
     if device.type != "cuda":
         return
     torch.cuda.empty_cache()
-    print(f"cleared_cuda_cache reason={reason}")
+    print(f"cache cleared ({reason})")
 
 
 def train_one_epoch(
-    model_forward: nn.Module,
-    model: nn.Module,
-    loader: DataLoader[Dict[str, Tensor]],
-    optimizer: torch.optim.Optimizer,
-    scaler: Optional[torch.amp.GradScaler],
-    device: torch.device,
-    amp_dtype: torch.dtype,
+    model_forward,
+    model,
+    loader,
+    optimizer,
+    scaler,
+    device,
+    amp_dtype,
     config: TrainConfig,
-    epoch: int,
-    total_epochs: int,
-) -> tuple[Dict[str, float], int]:
+    epoch,
+    total_epochs,
+):
     model.train()
-    running = {"loss": 0.0, "traj_loss": 0.0, "goal_loss": 0.0, "ade": 0.0, "fde": 0.0}
-    steps           = 0
+
+    running = {
+        "loss": 0.0,
+        "traj_loss": 0.0,
+        "goal_loss": 0.0,
+        "ade": 0.0,
+        "fde": 0.0,
+    }
+
+    steps = 0
     optimizer_steps = 0
-    start_time      = time.time()
-    use_autocast    = device.type == "cuda"
-    use_scaler      = scaler is not None and scaler.is_enabled()
-    accum_steps     = max(1, config.grad_accum_steps)
+    start_time = time.time()
+
+    use_autocast = device.type == "cuda"
+    use_scaler = scaler is not None and scaler.is_enabled()
+    accum_steps = max(1, config.grad_accum_steps)
 
     optimizer.zero_grad(set_to_none=True)
 
     for step, batch in enumerate(loader, start=1):
-        x            = batch["x"].to(device, non_blocking=True)
-        positions    = batch["positions"].to(device, non_blocking=True)
-        gt           = batch["future"].to(device, non_blocking=True)
+
+        x = batch["x"].to(device, non_blocking=True)
+        positions = batch["positions"].to(device, non_blocking=True)
+        gt = batch["future"].to(device, non_blocking=True)
         map_features = batch["map"].to(device, non_blocking=True)
 
         try:
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_autocast):
+
                 traj, goals, probs = model_forward(x, positions, map_features)
+
                 traj_loss, ade, fde = best_of_k_loss(traj, gt, return_metrics=True)
-                goal_loss  = goal_classification_loss(probs, goals, gt)
-                loss       = traj_loss + config.goal_loss_weight * goal_loss
+                goal_loss = goal_classification_loss(probs, goals, gt)
+
+                loss = traj_loss + config.goal_loss_weight * goal_loss
                 scaled_loss = loss / accum_steps
 
             if not torch.isfinite(loss):
-                print(f"epoch={epoch+1}/{total_epochs} step={step} invalid loss, skipping")
+                print(f"epoch={epoch+1} step={step} bad loss")
                 optimizer.zero_grad(set_to_none=True)
                 continue
 
@@ -406,20 +439,21 @@ def train_one_epoch(
                 scaled_loss.backward()
 
         except torch.OutOfMemoryError:
-            print(f"epoch={epoch+1}/{total_epochs} step={step} OOM — skipping batch")
+            print(f"epoch={epoch+1} step={step} OOM")
             optimizer.zero_grad(set_to_none=True)
             if config.empty_cache_on_oom:
-                maybe_empty_cuda_cache(device, reason="oom")
+                maybe_empty_cuda_cache(device, "oom")
             continue
 
-        running["loss"]      += float(loss.item())
+        running["loss"] += float(loss.item())
         running["traj_loss"] += float(traj_loss.item())
         running["goal_loss"] += float(goal_loss.item())
-        running["ade"]       += float(ade.item())
-        running["fde"]       += float(fde.item())
+        running["ade"] += float(ade.item())
+        running["fde"] += float(fde.item())
         steps += 1
 
         should_step = (step % accum_steps == 0) or (step == len(loader))
+
         if should_step:
             if use_scaler:
                 scaler.unscale_(optimizer)
@@ -429,75 +463,88 @@ def train_one_epoch(
             else:
                 clip_grad_norm_(model.parameters(), max_norm=config.gradient_clip_norm)
                 optimizer.step()
+
             optimizer.zero_grad(set_to_none=True)
             optimizer_steps += 1
 
         if step % config.log_interval == 0 or step == 1 or step == len(loader):
             elapsed = time.time() - start_time
-            sps     = (step * x.size(0)) / max(elapsed, 1e-6)
-            mem_gb  = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0.0
+            sps = (step * x.size(0)) / max(elapsed, 1e-6)
+
+            mem_gb = (
+                torch.cuda.max_memory_allocated(device) / 1024**3
+                if device.type == "cuda"
+                else 0.0
+            )
+
             print(
-                f"  epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} "
-                f"loss={loss.item():.4f} traj={traj_loss.item():.4f} goal={goal_loss.item():.4f} "
-                f"ade={ade.item():.4f} fde={fde.item():.4f} "
+                f"epoch={epoch+1}/{total_epochs} step={step}/{len(loader)} "
+                f"loss={loss.item():.4f} ade={ade.item():.4f} fde={fde.item():.4f} "
                 f"sps={sps:.1f} mem={mem_gb:.2f}GB"
             )
 
     if steps == 0:
-        raise RuntimeError("All training batches were skipped.")
+        raise RuntimeError("no training batches")
 
     return {k: v / steps for k, v in running.items()}, optimizer_steps
 
 
 @torch.inference_mode()
-def evaluate(
-    model: nn.Module,
-    loader: DataLoader[Dict[str, Tensor]],
-    device: torch.device,
-    amp_dtype: torch.dtype,
-    config: TrainConfig,
-) -> Dict[str, float]:
+def evaluate(model, loader, device, amp_dtype, config: TrainConfig):
+
     model.eval()
-    running      = {"loss": 0.0, "traj_loss": 0.0, "goal_loss": 0.0, "ade": 0.0, "fde": 0.0}
-    steps        = 0
+
+    running = {
+        "loss": 0.0,
+        "traj_loss": 0.0,
+        "goal_loss": 0.0,
+        "ade": 0.0,
+        "fde": 0.0,
+    }
+
+    steps = 0
     use_autocast = device.type == "cuda"
 
     for step, batch in enumerate(loader, start=1):
-        x            = batch["x"].to(device, non_blocking=True)
-        positions    = batch["positions"].to(device, non_blocking=True)
-        gt           = batch["future"].to(device, non_blocking=True)
+
+        x = batch["x"].to(device, non_blocking=True)
+        positions = batch["positions"].to(device, non_blocking=True)
+        gt = batch["future"].to(device, non_blocking=True)
         map_features = batch["map"].to(device, non_blocking=True)
 
         try:
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_autocast):
+
                 traj, goals, probs = model(x, positions, map_features)
+
                 traj_loss, ade, fde = best_of_k_loss(traj, gt, return_metrics=True)
                 goal_loss = goal_classification_loss(probs, goals, gt)
-                loss      = traj_loss + config.goal_loss_weight * goal_loss
+
+                loss = traj_loss + config.goal_loss_weight * goal_loss
+
         except torch.OutOfMemoryError:
-            print(f"eval step={step} OOM — skipping")
+            print(f"eval step={step} OOM")
             if config.empty_cache_on_oom:
-                maybe_empty_cuda_cache(device, reason="eval_oom")
+                maybe_empty_cuda_cache(device, "eval_oom")
             continue
 
         if not torch.isfinite(loss):
             continue
 
-        running["loss"]      += float(loss.item())
+        running["loss"] += float(loss.item())
         running["traj_loss"] += float(traj_loss.item())
         running["goal_loss"] += float(goal_loss.item())
-        running["ade"]       += float(ade.item())
-        running["fde"]       += float(fde.item())
+        running["ade"] += float(ade.item())
+        running["fde"] += float(fde.item())
         steps += 1
 
     if steps == 0:
-        raise RuntimeError("Validation produced no finite batches.")
+        raise RuntimeError("no valid eval batches")
 
     return {k: v / steps for k, v in running.items()}
 
 
-def train() -> None:
-    """Train on nuScenes trainval — optimised for RTX 5090 on Linux cloud."""
+def train():
 
     config = TrainConfig()
     set_seed(config.seed)
@@ -505,17 +552,14 @@ def train() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     configure_runtime(device)
 
-    print("=" * 60)
-    print("nuScenes trainval training — RTX 5090 cloud")
-    print("=" * 60)
+    print("=" * 50)
+    print("training start")
+    print("=" * 50)
+
     print(f"device={device}")
-    if device.type == "cuda":
-        props = torch.cuda.get_device_properties(0)
-        print(f"gpu={props.name}  vram={props.total_memory/1024**3:.1f}GB")
-    print(f"dataset_root={config.dataset_root!r}  version={config.version}")
-    print(f"dataset_limit={config.dataset_limit}  repeat={config.train_repeat_factor}")
 
     train_dataset, val_dataset = build_datasets(config)
+
     pin_memory = device.type == "cuda"
 
     train_loader = make_dataloader(
@@ -527,6 +571,7 @@ def train() -> None:
         pin_memory=pin_memory,
         drop_last=True,
     )
+
     val_loader = make_dataloader(
         val_dataset,
         batch_size=config.eval_batch_size,
@@ -537,81 +582,86 @@ def train() -> None:
         drop_last=False,
     )
 
-    model     = TrajectoryPredictor().to(device)
+    model = TrajectoryPredictor().to(device)
     optimizer = build_optimizer(model, config, device)
+
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5, min_lr=config.min_learning_rate,
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=5,
+        min_lr=config.min_learning_rate,
     )
 
     amp_dtype = torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16
-    scaler: Optional[torch.amp.GradScaler] = (
+
+    scaler = (
         torch.amp.GradScaler("cuda", enabled=(amp_dtype == torch.float16))
-        if device.type == "cuda" else None
+        if device.type == "cuda"
+        else None
     )
 
     checkpoint_dir = Path(config.checkpoint_dir)
-    start_epoch    = 0
-    global_step    = 0
-    best_val_loss  = float("inf")
+
+    start_epoch = 0
+    global_step = 0
+    best_val_loss = float("inf")
 
     if config.resume:
         start_epoch, global_step, best_val_loss = load_resume_checkpoint(
-            model, optimizer, scheduler, scaler, checkpoint_dir, device, config,
+            model, optimizer, scheduler, scaler, checkpoint_dir, device, config
         )
 
     compiled_model = maybe_compile_model(model, config, device)
 
-    total_epochs   = start_epoch + config.run_epochs
-    effective_batch = config.batch_size * max(1, config.grad_accum_steps)
-
-    print(f"\ntrain_samples={len(train_dataset)}  val_samples={len(val_dataset)}")
-    print(f"steps_per_epoch={len(train_loader)}  eval_steps={len(val_loader)}")
-    print(f"batch={config.batch_size}  effective_batch={effective_batch}  accum={config.grad_accum_steps}")
-    print(f"lr={optimizer.param_groups[0]['lr']:.2e}  amp={amp_dtype}")
-    print(f"training from epoch {start_epoch+1} → {total_epochs}")
-    print(f"checkpoint_dir={checkpoint_dir}\n")
-
-    total_start = time.time()
+    total_epochs = start_epoch + config.run_epochs
 
     for epoch in range(start_epoch, total_epochs):
-        epoch_start = time.time()
-        if device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats(device)
 
         train_metrics, step_increment = train_one_epoch(
-            compiled_model, model, train_loader, optimizer, scaler,
-            device, amp_dtype, config, epoch, total_epochs,
+            compiled_model,
+            model,
+            train_loader,
+            optimizer,
+            scaler,
+            device,
+            amp_dtype,
+            config,
+            epoch,
+            total_epochs,
         )
+
         global_step += step_increment
 
         val_metrics = evaluate(model, val_loader, device, amp_dtype, config)
+
         scheduler.step(val_metrics["loss"])
 
         checkpoint = create_checkpoint(
-            model, optimizer, scheduler, scaler,
+            model,
+            optimizer,
+            scheduler,
+            scaler,
             epoch=epoch + 1,
             global_step=global_step,
             train_metrics=train_metrics,
             val_metrics=val_metrics,
         )
+
         save_checkpoint(checkpoint, checkpoint_dir / "latest.pt")
         update_best_checkpoints(checkpoint, checkpoint_dir)
+
         best_val_loss = min(best_val_loss, val_metrics["loss"])
 
-        epoch_time = time.time() - epoch_start
-        peak_mem   = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0.0
         print(
             f"[epoch={epoch+1}/{total_epochs}] "
-            f"train_loss={train_metrics['loss']:.4f} train_ade={train_metrics['ade']:.4f} train_fde={train_metrics['fde']:.4f} "
-            f"val_loss={val_metrics['loss']:.4f} val_ade={val_metrics['ade']:.4f} val_fde={val_metrics['fde']:.4f} "
-            f"lr={optimizer.param_groups[0]['lr']:.2e} time={epoch_time:.1f}s "
-            f"best_val={best_val_loss:.4f} peak_mem={peak_mem:.2f}GB"
+            f"train={train_metrics['loss']:.4f} "
+            f"val={val_metrics['loss']:.4f} "
+            f"best={best_val_loss:.4f}"
         )
 
-    total_time = time.time() - total_start
-    print(f"\ntraining_complete_minutes={total_time/60:.1f}")
+    print("\ntraining done")
     print(f"best_val_loss={best_val_loss:.4f}")
-    print(f"checkpoints_saved_to={checkpoint_dir}/")
 
 
 if __name__ == "__main__":
