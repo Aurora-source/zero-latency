@@ -8,6 +8,10 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+import torch.nn as nn
+
+
+
 __all__ = [
     "compute_ade",
     "compute_fde",
@@ -48,55 +52,56 @@ def compute_fde(pred: Tensor, gt: Tensor) -> Tensor:
     return torch.linalg.vector_norm(final_displacement, dim=-1)
 
 
-def best_of_k_loss(
-  pred_traj: Tensor,
-    gt_traj: Tensor,
-    ade_weight: float = 1.0,
-    fde_weight: float = 1.0,
-    smooth_weight: float = 0.001,  # New hyperparameter
-    return_metrics: bool = False,
-) -> Tensor | Tuple[Tensor, Tensor, Tensor]:
-    """Compute best-of-K trajectory loss with ADE/FDE selection.
+class AutoTunedBestOfKLoss(nn.Module):
+    """Compute best-of-K trajectory loss with auto-tuned ADE/FDE and smoothness weights."""
+    
+    def __init__(self, ade_weight: float = 1.0, fde_weight: float = 1.0):
+        super().__init__()
+        self.ade_weight = ade_weight
+        self.fde_weight = fde_weight
+        
+        # Initialize learnable log-variances (s) for uncertainty weighting.
+        # Initializing at 0.0 gives a starting effective weight of 1.0.
+        self.s_tracking = nn.Parameter(torch.zeros(1))
+        self.s_smoothness = nn.Parameter(torch.zeros(1))
 
-    Args:
-        pred_traj: Predicted trajectories of shape ``(batch, agents, modes, future_steps, 2)``.
-        gt_traj: Ground-truth trajectories of shape ``(batch, agents, future_steps, 2)``.
-        ade_weight: Weight applied to the best ADE term.
-        fde_weight: Weight applied to the best FDE term.
-        return_metrics: When ``True``, also return mean ADE and mean FDE.
+    def forward(
+        self, 
+        pred_traj: Tensor, 
+        gt_traj: Tensor, 
+        return_metrics: bool = False
+    ) -> Tensor | Tuple[Tensor, Tensor, Tensor]:
+        
+        # 1. Shape validations (Same as your original code)
+        if pred_traj.ndim != 5:
+            raise ValueError(f"pred_traj must have shape (batch, agents, modes, future_steps, 2)")
+        if gt_traj.ndim != 4:
+            raise ValueError(f"gt_traj must have shape (batch, agents, future_steps, 2)")
 
-    Returns:
-        Scalar loss, or ``(loss, ade, fde)`` when ``return_metrics=True``.
-    """
+        # 2. Compute ADE/FDE metrics for the Best-of-K selection
+        expanded_gt = gt_traj.unsqueeze(2)
+        ade_per_mode = compute_ade(pred_traj, expanded_gt)
+        best_mode_indices = ade_per_mode.argmin(dim=-1)
 
-    if pred_traj.ndim != 5:
-        raise ValueError(
-            "pred_traj must have shape (batch, agents, modes, future_steps, 2), "
-            f"but received {tuple(pred_traj.shape)}."
-        )
-    if gt_traj.ndim != 4:
-        raise ValueError(
-            "gt_traj must have shape (batch, agents, future_steps, 2), "
-            f"but received {tuple(gt_traj.shape)}."
-        )
-    if pred_traj.shape[:2] != gt_traj.shape[:2] or pred_traj.shape[-2:] != gt_traj.shape[-2:]:
-        raise ValueError("pred_traj and gt_traj must align on batch, agents, and future_steps.")
+        best_ade = ade_per_mode.gather(dim=-1, index=best_mode_indices.unsqueeze(-1)).squeeze(-1)
+        fde_per_mode = compute_fde(pred_traj, expanded_gt)
+        best_fde = fde_per_mode.gather(dim=-1, index=best_mode_indices.unsqueeze(-1)).squeeze(-1)
 
-    expanded_gt = gt_traj.unsqueeze(2)
-    ade_per_mode = compute_ade(pred_traj, expanded_gt)
-    best_mode_indices = ade_per_mode.argmin(dim=-1)
+        # 3. Calculate the RAW losses
+        raw_tracking_loss = (self.ade_weight * best_ade.mean()) + (self.fde_weight * best_fde.mean())
+        raw_smoothness_loss = compute_smoothness_loss(pred_traj)
 
-    best_ade = ade_per_mode.gather(dim=-1, index=best_mode_indices.unsqueeze(-1)).squeeze(-1)
-    fde_per_mode = compute_fde(pred_traj, expanded_gt)
-    best_fde = fde_per_mode.gather(dim=-1, index=best_mode_indices.unsqueeze(-1)).squeeze(-1)
+        # 4. Apply Auto-Tuning (Homoscedastic Uncertainty Weighting)
+        # L = exp(-s) * raw_loss + s
+        weighted_tracking = torch.exp(-self.s_tracking) * raw_tracking_loss + self.s_tracking
+        weighted_smoothness = torch.exp(-self.s_smoothness) * raw_smoothness_loss + self.s_smoothness
 
-    loss = ade_weight * best_ade.mean() + fde_weight * best_fde.mean()
-    if smooth_weight > 0:
-        reg_loss = compute_smoothness_loss(pred_traj)
-        loss += smooth_weight * reg_loss
-    if return_metrics:
-        return loss, best_ade.mean(), best_fde.mean()
-    return loss
+        # Combine for final loss
+        total_loss = weighted_tracking + weighted_smoothness
+
+        if return_metrics:
+            return total_loss, best_ade.mean(), best_fde.mean()
+        return total_loss
 
 
 def goal_classification_loss(goal_probs: Tensor, goals: Tensor, gt_traj: Tensor) -> Tensor:
