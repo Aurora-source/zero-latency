@@ -173,3 +173,38 @@ def compute_smoothness_loss(pred_traj: Tensor) -> Tensor:
     # We use the L2 norm squared to penalize large jumps more heavily
     # Mean over all dimensions to return a scalar loss
     return torch.mean(acceleration**2)
+
+def compute_frenet_smoothness_loss(pred_traj: Tensor) -> Tuple[Tensor, Tensor]:
+    """
+    Computes longitudinal (s) and lateral (d) jerk penalties using an 
+    agent-aligned pseudo-Frenet frame.
+    
+    Args:
+        pred_traj: Shape (batch, agents, modes, future_steps, 2)
+    Returns:
+        longitudinal_jerk_loss, lateral_jerk_loss (Scalars)
+    """
+    # 1. Calculate the initial heading vector (velocity between t=0 and t=1)
+    # Shape: (batch, agents, modes, 1, 2)
+    initial_velocity = pred_traj[..., 1:2, :] - pred_traj[..., 0:1, :]
+    
+    # 2. Normalize to get the tangent (forward) vector
+    norm = torch.linalg.vector_norm(initial_velocity, dim=-1, keepdim=True) + 1e-8
+    tangent = initial_velocity / norm
+    
+    # 3. Compute the normal (lateral) vector (rotate tangent 90 degrees)
+    # If tangent is (dx, dy), normal is (-dy, dx)
+    normal = torch.stack([-tangent[..., 1], tangent[..., 0]], dim=-1)
+    
+    # 4. Calculate standard acceleration and jerk on the raw (x,y) points
+    velocity = pred_traj[..., 1:, :] - pred_traj[..., :-1, :]
+    acceleration = velocity[..., 1:, :] - velocity[..., :-1, :]
+    jerk = acceleration[..., 1:, :] - acceleration[..., :-1, :] # Shape: (..., steps-3, 2)
+    
+    # 5. Project the (x,y) jerk onto the Frenet vectors using dot products
+    # We expand the tangent/normal vectors to match the time dimension
+    longitudinal_jerk = torch.sum(jerk * tangent, dim=-1) # Dot product with tangent
+    lateral_jerk = torch.sum(jerk * normal, dim=-1)       # Dot product with normal
+    
+    # 6. Return the mean squared magnitude for both
+    return torch.mean(longitudinal_jerk**2), torch.mean(lateral_jerk**2)
