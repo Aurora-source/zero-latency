@@ -1,5 +1,3 @@
-"""Temporal transformer encoder for agent trajectory histories."""
-
 from __future__ import annotations
 
 import math
@@ -12,16 +10,6 @@ __all__ = ["PositionalEncoding", "TransformerLayer", "TemporalTransformer"]
 
 
 class PositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding for temporal transformer inputs.
-
-    The class supports both ``(batch, time, embed_dim)`` and
-    ``(batch, time, agents, embed_dim)`` tensors.
-
-    Args:
-        embed_dim: Feature dimension of the input embeddings.
-        dropout: Dropout applied after positional encodings are added.
-        max_len: Initial sequence length to precompute.
-    """
 
     def __init__(
         self,
@@ -32,14 +20,15 @@ class PositionalEncoding(nn.Module):
         super().__init__()
 
         if embed_dim <= 0:
-            raise ValueError("embed_dim must be positive.")
+            raise ValueError("embed_dim must be positive")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0,1)")
         if max_len <= 0:
-            raise ValueError("max_len must be positive.")
+            raise ValueError("max_len must be positive")
 
         self.embed_dim = embed_dim
         self.dropout = nn.Dropout(dropout)
+
         self.register_buffer(
             "positional_encoding",
             self._build_encoding(max_len, embed_dim),
@@ -47,24 +36,22 @@ class PositionalEncoding(nn.Module):
         )
 
     def forward(self, inputs: Tensor) -> Tensor:
-        """Add sinusoidal positional encodings to the input tensor."""
 
         if inputs.ndim not in (3, 4):
-            raise ValueError(
-                "PositionalEncoding expects a tensor with 3 or 4 dimensions, "
-                f"but received shape {tuple(inputs.shape)}."
-            )
+            raise ValueError(f"input shape wrong: {tuple(inputs.shape)}")
 
-        sequence_length = inputs.size(1)
-        encoding = self._get_encoding(
-            sequence_length=sequence_length,
+        L = inputs.size(1)
+
+        enc = self._get_encoding(
+            sequence_length=L,
             device=inputs.device,
             dtype=inputs.dtype,
         )
 
         if inputs.ndim == 3:
-            return self.dropout(inputs + encoding.unsqueeze(0))
-        return self.dropout(inputs + encoding.view(1, sequence_length, 1, self.embed_dim))
+            return self.dropout(inputs + enc.unsqueeze(0))
+
+        return self.dropout(inputs + enc.view(1, L, 1, self.embed_dim))
 
     def _get_encoding(
         self,
@@ -72,7 +59,6 @@ class PositionalEncoding(nn.Module):
         device: torch.device,
         dtype: torch.dtype,
     ) -> Tensor:
-        """Fetch or lazily extend the positional encoding buffer."""
 
         if sequence_length > self.positional_encoding.size(0):
             self.positional_encoding = self._build_encoding(
@@ -89,22 +75,23 @@ class PositionalEncoding(nn.Module):
         embed_dim: int,
         device: Optional[torch.device] = None,
     ) -> Tensor:
-        """Construct sinusoidal positional encodings."""
 
-        position = torch.arange(sequence_length, device=device, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
+        pos = torch.arange(sequence_length, device=device, dtype=torch.float32).unsqueeze(1)
+
+        div = torch.exp(
             torch.arange(0, embed_dim, 2, device=device, dtype=torch.float32)
             * (-math.log(10000.0) / embed_dim)
         )
 
-        encoding = torch.zeros(sequence_length, embed_dim, device=device, dtype=torch.float32)
-        encoding[:, 0::2] = torch.sin(position * div_term)
-        encoding[:, 1::2] = torch.cos(position * div_term[: encoding[:, 1::2].shape[1]])
-        return encoding
+        enc = torch.zeros(sequence_length, embed_dim, device=device, dtype=torch.float32)
+
+        enc[:, 0::2] = torch.sin(pos * div)
+        enc[:, 1::2] = torch.cos(pos * div[: enc[:, 1::2].shape[1]])
+
+        return enc
 
 
 class TransformerLayer(nn.Module):
-    """Single temporal transformer encoder layer."""
 
     def __init__(
         self,
@@ -116,15 +103,15 @@ class TransformerLayer(nn.Module):
         super().__init__()
 
         if embed_dim <= 0:
-            raise ValueError("embed_dim must be positive.")
+            raise ValueError("embed_dim must be positive")
         if num_heads <= 0:
-            raise ValueError("num_heads must be positive.")
+            raise ValueError("num_heads must be positive")
         if ff_dim <= 0:
-            raise ValueError("ff_dim must be positive.")
+            raise ValueError("ff_dim must be positive")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0,1)")
         if embed_dim % num_heads != 0:
-            raise ValueError("embed_dim must be divisible by num_heads.")
+            raise ValueError("embed_dim must be divisible by num_heads")
 
         self.self_attention = nn.MultiheadAttention(
             embed_dim=embed_dim,
@@ -132,6 +119,7 @@ class TransformerLayer(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
+
         self.attention_dropout = nn.Dropout(dropout)
         self.attention_norm = nn.LayerNorm(embed_dim)
 
@@ -141,6 +129,7 @@ class TransformerLayer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(ff_dim, embed_dim),
         )
+
         self.feedforward_dropout = nn.Dropout(dropout)
         self.feedforward_norm = nn.LayerNorm(embed_dim)
 
@@ -150,9 +139,8 @@ class TransformerLayer(nn.Module):
         padding_mask: Optional[Tensor] = None,
         attention_mask: Optional[Tensor] = None,
     ) -> Tensor:
-        """Apply temporal self-attention followed by a feedforward network."""
 
-        attention_output, _ = self.self_attention(
+        x, _ = self.self_attention(
             inputs,
             inputs,
             inputs,
@@ -160,16 +148,15 @@ class TransformerLayer(nn.Module):
             attn_mask=attention_mask,
             need_weights=False,
         )
-        inputs = self.attention_norm(inputs + self.attention_dropout(attention_output))
 
-        feedforward_output = self.feedforward(inputs)
-        return self.feedforward_norm(
-            inputs + self.feedforward_dropout(feedforward_output)
-        )
+        inputs = self.attention_norm(inputs + self.attention_dropout(x))
+
+        x = self.feedforward(inputs)
+
+        return self.feedforward_norm(inputs + self.feedforward_dropout(x))
 
 
 class TemporalTransformer(nn.Module):
-    """Temporal transformer encoder over the time dimension for each agent."""
 
     def __init__(
         self,
@@ -183,17 +170,17 @@ class TemporalTransformer(nn.Module):
         super().__init__()
 
         if num_layers <= 0:
-            raise ValueError("num_layers must be positive.")
+            raise ValueError("num_layers must be positive")
         if embed_dim <= 0:
-            raise ValueError("embed_dim must be positive.")
+            raise ValueError("embed_dim must be positive")
         if num_heads <= 0:
-            raise ValueError("num_heads must be positive.")
+            raise ValueError("num_heads must be positive")
         if ff_dim <= 0:
-            raise ValueError("ff_dim must be positive.")
+            raise ValueError("ff_dim must be positive")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0,1)")
         if embed_dim % num_heads != 0:
-            raise ValueError("embed_dim must be divisible by num_heads.")
+            raise ValueError("embed_dim must be divisible by num_heads")
 
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -206,6 +193,7 @@ class TemporalTransformer(nn.Module):
             dropout=dropout,
             max_len=max_len,
         )
+
         self.layers = nn.ModuleList(
             [
                 TransformerLayer(
@@ -224,140 +212,90 @@ class TemporalTransformer(nn.Module):
         padding_mask: Optional[Tensor] = None,
         use_causal_mask: bool = False,
     ) -> Tensor:
-        """Encode temporal motion patterns for each agent independently.
-
-        Args:
-            inputs: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            padding_mask: Optional boolean-compatible tensor of shape ``(batch, time)``.
-                ``True`` values mark padded timesteps that should be ignored.
-            use_causal_mask: Whether to prevent attention to future timesteps.
-
-        Returns:
-            Tensor of shape ``(batch, time, agents, embed_dim)``.
-        """
 
         if inputs.ndim != 4:
-            raise ValueError(
-                f"Expected inputs with 4 dimensions (batch, time, agents, embed_dim), "
-                f"but received shape {tuple(inputs.shape)}."
-            )
+            raise ValueError(f"input shape wrong: {tuple(inputs.shape)}")
 
-        batch_size, time_steps, num_agents, embed_dim = inputs.shape
-        if embed_dim != self.embed_dim:
-            raise ValueError(
-                f"Expected embed_dim={self.embed_dim}, but received {embed_dim}."
-            )
+        b, t, a, e = inputs.shape
 
-        model_dtype = self.layers[0].self_attention.in_proj_weight.dtype
-        outputs = inputs.to(dtype=model_dtype)
-        outputs = self.positional_encoding(outputs)
-        outputs = outputs.permute(0, 2, 1, 3).reshape(
-            batch_size * num_agents,
-            time_steps,
-            embed_dim,
+        if e != self.embed_dim:
+            raise ValueError(f"embed dim mismatch: {e}")
+
+        dtype = self.layers[0].self_attention.in_proj_weight.dtype
+
+        out = inputs.to(dtype=dtype)
+        out = self.positional_encoding(out)
+
+        out = out.permute(0, 2, 1, 3).reshape(b * a, t, e)
+
+        base_mask = self._normalize_padding_mask(
+            padding_mask, b, t, inputs.device
         )
 
-        base_padding_mask = self._normalize_padding_mask(
-            padding_mask=padding_mask,
-            batch_size=batch_size,
-            time_steps=time_steps,
-            device=inputs.device,
-        )
-        expanded_padding_mask = self._expand_padding_mask(base_padding_mask, num_agents)
+        exp_mask = self._expand_padding_mask(base_mask, a)
 
-        if expanded_padding_mask is not None:
-            outputs = outputs.masked_fill(expanded_padding_mask.unsqueeze(-1), 0.0)
-            effective_padding_mask = expanded_padding_mask
-            fully_padded_rows = effective_padding_mask.all(dim=1)
-            if torch.any(fully_padded_rows):
-                effective_padding_mask = effective_padding_mask.clone()
-                effective_padding_mask[fully_padded_rows] = False
+        if exp_mask is not None:
+            out = out.masked_fill(exp_mask.unsqueeze(-1), 0.0)
+
+            eff_mask = exp_mask
+            full = eff_mask.all(dim=1)
+
+            if torch.any(full):
+                eff_mask = eff_mask.clone()
+                eff_mask[full] = False
         else:
-            effective_padding_mask = None
+            eff_mask = None
 
-        attention_mask = None
+        attn_mask = None
         if use_causal_mask:
-            attention_mask = self._build_causal_mask(time_steps, device=inputs.device)
+            attn_mask = self._build_causal_mask(t, inputs.device)
 
         for layer in self.layers:
-            outputs = layer(
-                outputs,
-                padding_mask=effective_padding_mask,
-                attention_mask=attention_mask,
-            )
-            if expanded_padding_mask is not None:
-                outputs = outputs.masked_fill(expanded_padding_mask.unsqueeze(-1), 0.0)
+            out = layer(out, padding_mask=eff_mask, attention_mask=attn_mask)
 
-        outputs = outputs.reshape(batch_size, num_agents, time_steps, embed_dim)
-        outputs = outputs.permute(0, 2, 1, 3).contiguous()
+            if exp_mask is not None:
+                out = out.masked_fill(exp_mask.unsqueeze(-1), 0.0)
 
-        if base_padding_mask is not None:
-            outputs = outputs.masked_fill(base_padding_mask[:, :, None, None], 0.0)
+        out = out.reshape(b, a, t, e).permute(0, 2, 1, 3).contiguous()
 
-        return outputs
+        if base_mask is not None:
+            out = out.masked_fill(base_mask[:, :, None, None], 0.0)
+
+        return out
 
     @staticmethod
     def _normalize_padding_mask(
         padding_mask: Optional[Tensor],
-        batch_size: int,
-        time_steps: int,
+        b: int,
+        t: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and normalize a padding mask to boolean form."""
 
         if padding_mask is None:
             return None
-        if padding_mask.shape != (batch_size, time_steps):
-            raise ValueError(
-                "padding_mask must have shape (batch, time), "
-                f"but received {tuple(padding_mask.shape)}."
-            )
+
+        if padding_mask.shape != (b, t):
+            raise ValueError(f"padding mask wrong: {tuple(padding_mask.shape)}")
+
         return padding_mask.to(device=device, dtype=torch.bool)
 
     @staticmethod
     def _expand_padding_mask(
         padding_mask: Optional[Tensor],
-        num_agents: int,
+        a: int,
     ) -> Optional[Tensor]:
-        """Expand a batch-level padding mask to match the flattened agent dimension."""
 
         if padding_mask is None:
             return None
 
-        batch_size, time_steps = padding_mask.shape
-        return padding_mask.unsqueeze(1).expand(batch_size, num_agents, time_steps).reshape(
-            batch_size * num_agents,
-            time_steps,
-        )
+        b, t = padding_mask.shape
+
+        return padding_mask.unsqueeze(1).expand(b, a, t).reshape(b * a, t)
 
     @staticmethod
-    def _build_causal_mask(time_steps: int, device: torch.device) -> Tensor:
-        """Create an upper-triangular causal mask over the temporal dimension."""
+    def _build_causal_mask(t: int, device: torch.device) -> Tensor:
 
         return torch.triu(
-            torch.ones(time_steps, time_steps, device=device, dtype=torch.bool),
+            torch.ones(t, t, device=device, dtype=torch.bool),
             diagonal=1,
         )
-
-
-def _run_smoke_test() -> None:
-    """Run a minimal shape test with dummy temporal embeddings."""
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = TemporalTransformer().to(device)
-
-    dummy_inputs = torch.randn(2, 10, 5, model.embed_dim, device=device)
-    padding_mask = torch.zeros(2, 10, dtype=torch.bool, device=device)
-    padding_mask[0, 8:] = True
-    padding_mask[1, 9:] = True
-
-    outputs = model(dummy_inputs, padding_mask=padding_mask, use_causal_mask=True)
-    expected_shape = (2, 10, 5, model.embed_dim)
-    assert outputs.shape == expected_shape, (
-        f"Expected output shape {expected_shape}, got {tuple(outputs.shape)}."
-    )
-    print(f"Output shape: {tuple(outputs.shape)}")
-
-
-if __name__ == "__main__":
-    _run_smoke_test()
