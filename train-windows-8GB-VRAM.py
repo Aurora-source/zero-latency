@@ -1,5 +1,3 @@
-"""Training entrypoint optimised for Windows and 8GB Vram"""
-
 from __future__ import annotations
 
 import inspect
@@ -11,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-# Suppress Windows-specific warnings
 warnings.filterwarnings("ignore", message="expandable_segments not supported")
 warnings.filterwarnings("ignore", message="Online softmax is disabled")
 
@@ -32,7 +29,6 @@ from utils.losses import best_of_k_loss, goal_classification_loss
 
 @dataclass(frozen=True)
 class TrainConfig:
-    """ Windows optimised config """
 
     dataset_root: str   = os.getenv("NUSCENES_ROOT", "data/raw/nuscenes")
     version: str        = "v1.0-mini"
@@ -40,36 +36,31 @@ class TrainConfig:
     dataset_limit: int  = int(os.getenv("DATASET_LIMIT", "404"))
     run_epochs: int     = int(os.getenv("RUN_EPOCHS", "40"))
 
-    # --- VRAM settings for 8GB VRAM ---
     batch_size: int        = int(os.getenv("BATCH_SIZE", "4"))
     eval_batch_size: int   = int(os.getenv("EVAL_BATCH_SIZE", "4"))
-    grad_accum_steps: int  = int(os.getenv("GRAD_ACCUM_STEPS", "8"))   # effective batch = 32
+    grad_accum_steps: int  = int(os.getenv("GRAD_ACCUM_STEPS", "8"))   
 
-    # --- Optimiser ---
     learning_rate: float   = float(os.getenv("LR", "5e-5"))
     min_learning_rate: float = float(os.getenv("MIN_LR", "1e-6"))
     weight_decay: float    = float(os.getenv("WEIGHT_DECAY", "1e-2"))
     goal_loss_weight: float = float(os.getenv("GOAL_LOSS_WEIGHT", "0.1"))
     gradient_clip_norm: float = float(os.getenv("GRAD_CLIP", "1.0"))
 
-    # --- Dataset ---
     train_repeat_factor: int = int(os.getenv("TRAIN_REPEAT_FACTOR", "4"))
     validation_ratio: float  = float(os.getenv("VAL_RATIO", "0.1"))
     log_interval: int        = int(os.getenv("LOG_INTERVAL", "10"))
 
-    # --- Windows safe: num_workers=0 avoids spawn MemoryError on 16GB RAM ---
     num_workers: int     = int(os.getenv("NUM_WORKERS", "0"))
     prefetch_factor: int = int(os.getenv("PREFETCH_FACTOR", "2"))
 
     seed: int            = int(os.getenv("SEED", "7"))
     resume: bool         = os.getenv("RESUME", "1") == "1"
-    use_compile: bool    = os.getenv("TORCH_COMPILE", "0") == "1"      # off — no Triton on Windows
+    use_compile: bool    = os.getenv("TORCH_COMPILE", "0") == "1"      
     compile_mode: str    = os.getenv("TORCH_COMPILE_MODE", "reduce-overhead")
     empty_cache_on_oom: bool = os.getenv("EMPTY_CACHE_ON_OOM", "1") == "1"
 
 
 class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
-    """Cache dataset fully in memory — fits in 16GB RAM for mini dataset."""
 
     def __init__(self, dataset: Dataset[Dict[str, Tensor]]) -> None:
         super().__init__()
@@ -314,7 +305,6 @@ def load_resume_checkpoint(
             global_step = int(checkpoint.get("global_step", 0))
             best_loss   = extract_checkpoint_loss(checkpoint)
 
-            # Smart LR resume
             current_lr = optimizer.param_groups[0]["lr"]
             if current_lr < config.min_learning_rate:
                 for pg in optimizer.param_groups:
@@ -491,7 +481,6 @@ def evaluate(
 
 
 def train() -> None:
-    """Train on nuScenes mini — optimised for 8GB VRAM + Windows"""
 
     config = TrainConfig()
     set_seed(config.seed)
