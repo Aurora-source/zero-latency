@@ -1,5 +1,3 @@
-"""Multi-modal transformer decoder for future trajectory generation."""
-
 from __future__ import annotations
 
 from typing import Tuple
@@ -11,7 +9,6 @@ __all__ = ["DecoderLayer", "MultiModalDecoder"]
 
 
 class DecoderLayer(nn.Module):
-    """Single transformer decoder layer over future trajectory tokens."""
 
     def __init__(
         self,
@@ -23,15 +20,15 @@ class DecoderLayer(nn.Module):
         super().__init__()
 
         if embed_dim <= 0:
-            raise ValueError("embed_dim must be positive.")
+            raise ValueError("embed_dim must be positive")
         if num_heads <= 0:
-            raise ValueError("num_heads must be positive.")
+            raise ValueError("num_heads must be positive")
         if ff_dim <= 0:
-            raise ValueError("ff_dim must be positive.")
+            raise ValueError("ff_dim must be positive")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0,1)")
         if embed_dim % num_heads != 0:
-            raise ValueError("embed_dim must be divisible by num_heads.")
+            raise ValueError("embed_dim must be divisible by num_heads")
 
         self.self_attention = nn.MultiheadAttention(
             embed_dim=embed_dim,
@@ -61,36 +58,34 @@ class DecoderLayer(nn.Module):
         self.feedforward_norm = nn.LayerNorm(embed_dim)
 
     def forward(self, trajectory_tokens: Tensor, memory: Tensor) -> Tensor:
-        """Apply self-attention, cross-attention, and an FFN update."""
 
-        self_attention_output, _ = self.self_attention(
+        x, _ = self.self_attention(
             trajectory_tokens,
             trajectory_tokens,
             trajectory_tokens,
             need_weights=False,
         )
         trajectory_tokens = self.self_attention_norm(
-            trajectory_tokens + self.self_attention_dropout(self_attention_output)
+            trajectory_tokens + self.self_attention_dropout(x)
         )
 
-        cross_attention_output, _ = self.cross_attention(
+        x, _ = self.cross_attention(
             query=trajectory_tokens,
             key=memory,
             value=memory,
             need_weights=False,
         )
         trajectory_tokens = self.cross_attention_norm(
-            trajectory_tokens + self.cross_attention_dropout(cross_attention_output)
+            trajectory_tokens + self.cross_attention_dropout(x)
         )
 
-        feedforward_output = self.feedforward(trajectory_tokens)
+        x = self.feedforward(trajectory_tokens)
         return self.feedforward_norm(
-            trajectory_tokens + self.feedforward_dropout(feedforward_output)
+            trajectory_tokens + self.feedforward_dropout(x)
         )
 
 
 class MultiModalDecoder(nn.Module):
-    """Decode one future trajectory per candidate goal for each agent."""
 
     def __init__(
         self,
@@ -104,19 +99,19 @@ class MultiModalDecoder(nn.Module):
         super().__init__()
 
         if num_layers <= 0:
-            raise ValueError("num_layers must be positive.")
+            raise ValueError("num_layers must be positive")
         if num_heads <= 0:
-            raise ValueError("num_heads must be positive.")
+            raise ValueError("num_heads must be positive")
         if embed_dim <= 0:
-            raise ValueError("embed_dim must be positive.")
+            raise ValueError("embed_dim must be positive")
         if ff_dim <= 0:
-            raise ValueError("ff_dim must be positive.")
+            raise ValueError("ff_dim must be positive")
         if not 0.0 <= dropout < 1.0:
-            raise ValueError("dropout must be in the range [0.0, 1.0).")
+            raise ValueError("dropout must be in [0,1)")
         if future_steps <= 0:
-            raise ValueError("future_steps must be positive.")
+            raise ValueError("future_steps must be positive")
         if embed_dim % num_heads != 0:
-            raise ValueError("embed_dim must be divisible by num_heads.")
+            raise ValueError("embed_dim must be divisible by num_heads")
 
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -140,6 +135,7 @@ class MultiModalDecoder(nn.Module):
                 for _ in range(num_layers)
             ]
         )
+
         self.output_projection = nn.Linear(embed_dim, 2)
 
     def forward(
@@ -148,114 +144,81 @@ class MultiModalDecoder(nn.Module):
         goals: Tensor,
         goal_probabilities: Tensor,
     ) -> Tensor:
-        """Decode multi-modal future trajectories from context and goal proposals.
-
-        Args:
-            scene_embeddings: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            goals: Tensor of shape ``(batch, agents, num_goals, 2)``.
-            goal_probabilities: Tensor of shape ``(batch, agents, num_goals)``.
-
-        Returns:
-            Tensor of shape ``(batch, agents, num_goals, future_steps, 2)``.
-        """
 
         if scene_embeddings.ndim != 4:
-            raise ValueError(
-                "scene_embeddings must have shape (batch, time, agents, embed_dim), "
-                f"but received {tuple(scene_embeddings.shape)}."
-            )
+            raise ValueError(f"scene_embeddings shape wrong: {tuple(scene_embeddings.shape)}")
         if goals.ndim != 4:
-            raise ValueError(
-                f"goals must have shape (batch, agents, num_goals, 2), but received {tuple(goals.shape)}."
-            )
+            raise ValueError(f"goals shape wrong: {tuple(goals.shape)}")
         if goal_probabilities.ndim != 3:
-            raise ValueError(
-                "goal_probabilities must have shape (batch, agents, num_goals), "
-                f"but received {tuple(goal_probabilities.shape)}."
-            )
+            raise ValueError(f"goal_probs shape wrong: {tuple(goal_probabilities.shape)}")
 
-        batch_size, time_steps, num_agents, embed_dim = scene_embeddings.shape
-        if time_steps <= 0:
-            raise ValueError("scene_embeddings must contain at least one timestep.")
-        if embed_dim != self.embed_dim:
-            raise ValueError(
-                f"Expected embed_dim={self.embed_dim}, but received {embed_dim}."
-            )
-        if goals.shape[:2] != (batch_size, num_agents) or goals.size(-1) != 2:
-            raise ValueError(
-                "goals must have shape (batch, agents, num_goals, 2) aligned with scene_embeddings."
-            )
+        b, t, a, e = scene_embeddings.shape
+
+        if t <= 0:
+            raise ValueError("no timesteps")
+        if e != self.embed_dim:
+            raise ValueError(f"embed dim mismatch: {e}")
+
+        if goals.shape[:2] != (b, a) or goals.size(-1) != 2:
+            raise ValueError("goals shape mismatch")
         if goal_probabilities.shape != goals.shape[:3]:
-            raise ValueError(
-                "goal_probabilities must have shape (batch, agents, num_goals) aligned with goals."
-            )
+            raise ValueError("goal probs mismatch")
 
-        _, _, num_goals, _ = goals.shape
-        model_dtype = self.goal_condition_projection.weight.dtype
+        _, _, k, _ = goals.shape
 
-        context = scene_embeddings[:, -1, :, :].to(dtype=model_dtype)
-        normalized_goal_probabilities = goal_probabilities.to(dtype=model_dtype)
-        normalized_goal_probabilities = normalized_goal_probabilities / normalized_goal_probabilities.sum(
-            dim=-1,
-            keepdim=True,
-        ).clamp_min(1e-8)
+        dtype = self.goal_condition_projection.weight.dtype
 
-        expanded_context = context.unsqueeze(2).expand(batch_size, num_agents, num_goals, embed_dim)
-        goal_inputs = torch.cat((expanded_context, goals.to(dtype=model_dtype)), dim=-1)
-        conditioned_context = self.goal_condition_projection(goal_inputs)
-        conditioned_context = conditioned_context + normalized_goal_probabilities.unsqueeze(-1) * expanded_context
+        ctx = scene_embeddings[:, -1, :, :].to(dtype=dtype)
 
-        memory = conditioned_context.reshape(batch_size * num_agents * num_goals, 1, embed_dim)
-        future_tokens = self.future_query_tokens.view(1, 1, 1, self.future_steps, embed_dim).expand(
-            batch_size,
-            num_agents,
-            num_goals,
-            self.future_steps,
-            embed_dim,
+        prob = goal_probabilities.to(dtype=dtype)
+        prob = prob / prob.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+        ctx_exp = ctx.unsqueeze(2).expand(b, a, k, e)
+        goal_in = torch.cat((ctx_exp, goals.to(dtype=dtype)), dim=-1)
+
+        cond = self.goal_condition_projection(goal_in)
+        cond = cond + prob.unsqueeze(-1) * ctx_exp
+
+        memory = cond.reshape(b * a * k, 1, e)
+
+        future_tokens = self.future_query_tokens.view(1, 1, 1, self.future_steps, e).expand(
+            b, a, k, self.future_steps, e
         )
-        trajectory_tokens = future_tokens + conditioned_context.unsqueeze(-2)
-        trajectory_tokens = trajectory_tokens.reshape(
-            batch_size * num_agents * num_goals,
-            self.future_steps,
-            embed_dim,
-        )
+
+        traj = future_tokens + cond.unsqueeze(-2)
+        traj = traj.reshape(b * a * k, self.future_steps, e)
 
         for layer in self.layers:
-            trajectory_tokens = layer(trajectory_tokens, memory)
+            traj = layer(traj, memory)
 
-        trajectories = self.output_projection(trajectory_tokens).reshape(
-            batch_size,
-            num_agents,
-            num_goals,
-            self.future_steps,
-            2,
+        out = self.output_projection(traj).reshape(
+            b, a, k, self.future_steps, 2
         )
-        return trajectories
+
+        return out
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape and numerical-stability test."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MultiModalDecoder().to(device)
 
-    scene_embeddings = torch.randn(2, 6, 4, model.embed_dim, device=device)
+    x = torch.randn(2, 6, 4, model.embed_dim, device=device)
     goals = torch.randn(2, 4, 6, 2, device=device)
-    goal_probabilities = torch.softmax(torch.randn(2, 4, 6, device=device), dim=-1)
+    probs = torch.softmax(torch.randn(2, 4, 6, device=device), dim=-1)
 
-    trajectories = model(scene_embeddings, goals, goal_probabilities)
-    expected_shape = (2, 4, 6, model.future_steps, 2)
-    has_nans = torch.isnan(trajectories).any().item()
+    traj = model(x, goals, probs)
 
-    assert trajectories.shape == expected_shape, (
-        f"Expected trajectory shape {expected_shape}, got {tuple(trajectories.shape)}."
-    )
-    assert not has_nans, "Decoder output contains NaNs."
+    exp = (2, 4, 6, model.future_steps, 2)
+    has_nan = torch.isnan(traj).any().item()
 
-    print(f"Trajectory shape: {tuple(trajectories.shape)}")
-    print(f"Mean: {trajectories.mean().item():.6f}")
-    print(f"Std: {trajectories.std().item():.6f}")
-    print(f"Has NaNs: {has_nans}")
+    assert traj.shape == exp, f"shape wrong: {tuple(traj.shape)}"
+    assert not has_nan
+
+    print(traj.shape)
+    print(traj.mean().item())
+    print(traj.std().item())
+    print(has_nan)
 
 
 if __name__ == "__main__":
