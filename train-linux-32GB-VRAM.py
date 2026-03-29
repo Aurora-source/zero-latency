@@ -1,5 +1,3 @@
-"""High-throughput training entrypoint for the nuScenes trainval trajectory pipeline."""
-
 from __future__ import annotations
 
 import inspect
@@ -31,46 +29,39 @@ from utils.losses import best_of_k_loss, goal_classification_loss
 
 
 @dataclass(frozen=True)
-class TrainConfig:
-    """Training configuration for RTX 5090 + AMD EPYC 64-core + 161GB RAM cloud training."""
 
-    # --- Dataset ---
+class TrainConfig:
     dataset_root: str   = os.getenv("NUSCENES_ROOT", "nuscenes")
     version: str        = os.getenv("NUSCENES_VERSION", "v1.0-trainval")
     checkpoint_dir: str = os.getenv("CHECKPOINT_DIR", "checkpoints")
-    dataset_limit: int  = int(os.getenv("DATASET_LIMIT", "6000"))       # parts 1+2 (~6K samples)
+    dataset_limit: int  = int(os.getenv("DATASET_LIMIT", "6000"))
     run_epochs: int     = int(os.getenv("RUN_EPOCHS", "40"))
 
-    # --- Batch / memory (RTX 5090 32GB VRAM) ---
-    batch_size: int        = int(os.getenv("BATCH_SIZE", "128"))         # 161GB RAM — go bigger
+    batch_size: int        = int(os.getenv("BATCH_SIZE", "128"))
     eval_batch_size: int   = int(os.getenv("EVAL_BATCH_SIZE", "64"))
     grad_accum_steps: int  = int(os.getenv("GRAD_ACCUM_STEPS", "1"))
 
-    # --- Optimiser ---
     learning_rate: float   = float(os.getenv("LR", "5e-5"))
     min_learning_rate: float = float(os.getenv("MIN_LR", "1e-6"))
     weight_decay: float    = float(os.getenv("WEIGHT_DECAY", "1e-2"))
     goal_loss_weight: float = float(os.getenv("GOAL_LOSS_WEIGHT", "0.1"))
     gradient_clip_norm: float = float(os.getenv("GRAD_CLIP", "1.0"))
 
-    # --- Data loading (64-core EPYC — max out workers) ---
     train_repeat_factor: int = int(os.getenv("TRAIN_REPEAT_FACTOR", "1"))
     validation_ratio: float  = float(os.getenv("VAL_RATIO", "0.1"))
     log_interval: int        = int(os.getenv("LOG_INTERVAL", "10"))
-    num_workers: int         = int(os.getenv("NUM_WORKERS", "32"))       # 64 cores — use 32 workers
-    prefetch_factor: int     = int(os.getenv("PREFETCH_FACTOR", "6"))    # more prefetch with 161GB RAM
+    num_workers: int         = int(os.getenv("NUM_WORKERS", "32"))
+    prefetch_factor: int     = int(os.getenv("PREFETCH_FACTOR", "6"))
 
-    # --- Misc ---
     seed: int            = int(os.getenv("SEED", "7"))
     resume: bool         = os.getenv("RESUME", "1") == "1"
     use_compile: bool    = os.getenv("TORCH_COMPILE", "1") == "1"
     compile_mode: str    = os.getenv("TORCH_COMPILE_MODE", "max-autotune")
     empty_cache_on_oom: bool = os.getenv("EMPTY_CACHE_ON_OOM", "1") == "1"
-    pin_memory_device: str   = os.getenv("PIN_MEMORY_DEVICE", "")       # pin directly to GPU
+    pin_memory_device: str   = os.getenv("PIN_MEMORY_DEVICE", "")
 
 
 class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
-    """Cache dataset fully in memory — fast for datasets that fit in RAM."""
 
     def __init__(self, dataset: Dataset[Dict[str, Tensor]]) -> None:
         super().__init__()
@@ -110,7 +101,6 @@ class CachedTrajectoryDataset(Dataset[Dict[str, Tensor]]):
 
 
 class TrajectoryPredictor(nn.Module):
-    """Full trajectory prediction stack."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -140,8 +130,6 @@ def set_seed(seed: int) -> None:
 
 def configure_runtime(device: torch.device) -> None:
     torch.set_float32_matmul_precision("high")
-
-    # AMD EPYC 64-core — let PyTorch use more threads for CPU ops
     torch.set_num_threads(32)
     torch.set_num_interop_threads(8)
 
@@ -321,8 +309,6 @@ def load_resume_checkpoint(
             start_epoch = int(checkpoint.get("epoch", 0))
             global_step = int(checkpoint.get("global_step", 0))
             best_loss   = extract_checkpoint_loss(checkpoint)
-
-            # Keep LR from checkpoint, only reset if it's effectively zero
             current_lr = optimizer.param_groups[0]["lr"]
             if current_lr < config.min_learning_rate:
                 for param_group in optimizer.param_groups:
@@ -497,8 +483,7 @@ def evaluate(
 
 
 def train() -> None:
-    """Train on nuScenes trainval — optimised for RTX 5090 on Linux cloud."""
-
+    
     config = TrainConfig()
     set_seed(config.seed)
 
