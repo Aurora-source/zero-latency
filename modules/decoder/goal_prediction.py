@@ -1,5 +1,3 @@
-"""Goal prediction network for multimodal future intent estimation."""
-
 from __future__ import annotations
 
 from typing import Tuple
@@ -11,13 +9,6 @@ __all__ = ["GoalPredictionNetwork"]
 
 
 class GoalPredictionNetwork(nn.Module):
-    """Predict multiple future goal candidates and their probabilities per agent.
-
-    The module consumes scene-aware agent embeddings of shape
-    ``(batch, time, agents, embed_dim)`` and uses the final observed timestep as
-    the temporal summary for multimodal goal prediction.
-    """
-
     def __init__(
         self,
         embed_dim: int = 896,
@@ -56,15 +47,6 @@ class GoalPredictionNetwork(nn.Module):
         self.goal_probability_head = nn.Linear(bottleneck_dim, num_goals)
 
     def forward(self, inputs: Tensor) -> Tuple[Tensor, Tensor]:
-        """Predict goal positions and probabilities for each agent.
-
-        Args:
-            inputs: Tensor of shape ``(batch, time, agents, embed_dim)``.
-
-        Returns:
-            A tuple ``(goal_positions, goal_probabilities)`` with shapes
-            ``(batch, agents, num_goals, 2)`` and ``(batch, agents, num_goals)``.
-        """
 
         if inputs.ndim != 4:
             raise ValueError(
@@ -96,8 +78,6 @@ class GoalPredictionNetwork(nn.Module):
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape and probability-normalization test."""
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = GoalPredictionNetwork().to(device)
 
