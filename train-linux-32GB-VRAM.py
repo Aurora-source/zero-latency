@@ -191,36 +191,34 @@ def build_datasets(config: TrainConfig) -> tuple[Dataset[Dict[str, Tensor]], Dat
         version=config.version,
     )
     
-    # 1. Cap the dataset to the limit
     actual_size = min(config.dataset_limit, len(raw_dataset))
-    working_dataset = Subset(raw_dataset, range(actual_size))
+    limited_dataset = Subset(raw_dataset, range(actual_size))
     
-    # 2. Dynamic Memory Management: Only cache if it's the mini dataset
-    if "mini" in config.version or actual_size < 1000:
-        print("Dataset is small: Loading fully into system RAM (Cached Mode)...")
-        working_dataset = CachedTrajectoryDataset(working_dataset)
-    else:
-        print("Dataset is large: Streaming directly from SSD (On-the-Fly Mode)...")
-        # We skip the RAM-killing cache entirely!
+    #
+    print(f"Loading {actual_size} samples completely into System RAM for max throughput...")
+    cached_dataset = CachedTrajectoryDataset(limited_dataset)
 
-    if len(working_dataset) < 2:
-        raise RuntimeError("Need at least two samples to build train/validation splits.")
+    if len(cached_dataset) < 2:
+        raise RuntimeError("Need at least two cached samples to build train/validation splits.")
 
-    # 3. Split into Train/Val
-    val_size = max(1, int(round(len(working_dataset) * config.validation_ratio)))
-    train_size = len(working_dataset) - val_size
+   
+    val_size = max(1, int(round(len(cached_dataset) * config.validation_ratio)))
+    train_size = len(cached_dataset) - val_size
 
     train_subset, val_subset = random_split(
-        working_dataset,
+        cached_dataset,
         [train_size, val_size],
         generator=torch.Generator().manual_seed(config.seed),
     )
 
-    # 4. Only repeat if it's the mini dataset to avoid infinite epochs
-    if config.train_repeat_factor > 1 and "mini" in config.version:
-        train_subset = ConcatDataset([train_subset] * config.train_repeat_factor)
+    # 4. Apply repetition factor if needed
+    repeated_train_dataset: Dataset[Dict[str, Tensor]]
+    if config.train_repeat_factor > 1:
+        repeated_train_dataset = ConcatDataset([train_subset] * config.train_repeat_factor)
+    else:
+        repeated_train_dataset = train_subset
 
-    return train_subset, val_subset
+    return repeated_train_dataset, val_subset
 
 
 def build_optimizer(
