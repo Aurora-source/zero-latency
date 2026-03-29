@@ -1,5 +1,3 @@
-"""Loss functions for multi-modal trajectory prediction."""
-
 from __future__ import annotations
 
 from typing import Tuple
@@ -17,15 +15,6 @@ __all__ = [
 
 
 def compute_ade(pred: Tensor, gt: Tensor) -> Tensor:
-    """Compute average displacement error over the trajectory horizon.
-
-    Args:
-        pred: Predicted trajectories with shape ``(..., future_steps, 2)``.
-        gt: Ground-truth trajectories broadcastable to ``pred``.
-
-    Returns:
-        Tensor of shape ``(...)`` containing ADE values.
-    """
 
     if pred.shape[-1] != 2 or gt.shape[-1] != 2:
         raise ValueError("pred and gt must end with coordinate dimension 2.")
@@ -37,8 +26,7 @@ def compute_ade(pred: Tensor, gt: Tensor) -> Tensor:
 
 
 def compute_fde(pred: Tensor, gt: Tensor) -> Tensor:
-    """Compute final displacement error at the final timestep."""
-
+    
     if pred.shape[-1] != 2 or gt.shape[-1] != 2:
         raise ValueError("pred and gt must end with coordinate dimension 2.")
     if pred.shape[-2] != gt.shape[-2]:
@@ -56,18 +44,6 @@ def best_of_k_loss(
     smooth_weight: float = 0.001,  # New hyperparameter
     return_metrics: bool = False,
 ) -> Tensor | Tuple[Tensor, Tensor, Tensor]:
-    """Compute best-of-K trajectory loss with ADE/FDE selection.
-
-    Args:
-        pred_traj: Predicted trajectories of shape ``(batch, agents, modes, future_steps, 2)``.
-        gt_traj: Ground-truth trajectories of shape ``(batch, agents, future_steps, 2)``.
-        ade_weight: Weight applied to the best ADE term.
-        fde_weight: Weight applied to the best FDE term.
-        return_metrics: When ``True``, also return mean ADE and mean FDE.
-
-    Returns:
-        Scalar loss, or ``(loss, ade, fde)`` when ``return_metrics=True``.
-    """
 
     if pred_traj.ndim != 5:
         raise ValueError(
@@ -100,16 +76,6 @@ def best_of_k_loss(
 
 
 def goal_classification_loss(goal_probs: Tensor, goals: Tensor, gt_traj: Tensor) -> Tensor:
-    """Encourage the highest-probability goal to match the GT final position.
-
-    Args:
-        goal_probs: Goal probabilities of shape ``(batch, agents, modes)``.
-        goals: Goal coordinates of shape ``(batch, agents, modes, 2)``.
-        gt_traj: Ground-truth trajectories of shape ``(batch, agents, future_steps, 2)``.
-
-    Returns:
-        Scalar goal classification loss.
-    """
 
     if goal_probs.ndim != 3:
         raise ValueError(
@@ -140,17 +106,7 @@ def goal_classification_loss(goal_probs: Tensor, goals: Tensor, gt_traj: Tensor)
 
 
 def compute_smoothness_loss(pred_traj: Tensor) -> Tensor:
-    """Compute the smoothness regularization loss (second-order difference).
-    
-    This penalizes high acceleration/jerk in the predicted trajectories to 
-    ensure physically feasible paths.
 
-    Args:
-        pred_traj: Predicted trajectories of shape ``(batch, agents, modes, future_steps, 2)``.
-
-    Returns:
-        Scalar tensor representing the mean smoothness penalty.
-    """
     if pred_traj.ndim != 5:
         raise ValueError(
             f"pred_traj must have shape (batch, agents, modes, future_steps, 2), "
