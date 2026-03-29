@@ -1,5 +1,3 @@
-"""Multi-modal transformer decoder for future trajectory generation."""
-
 from __future__ import annotations
 
 from typing import Tuple
@@ -11,7 +9,6 @@ __all__ = ["DecoderLayer", "MultiModalDecoder"]
 
 
 class DecoderLayer(nn.Module):
-    """Single transformer decoder layer over future trajectory tokens."""
 
     def __init__(
         self,
@@ -61,8 +58,6 @@ class DecoderLayer(nn.Module):
         self.feedforward_norm = nn.LayerNorm(embed_dim)
 
     def forward(self, trajectory_tokens: Tensor, memory: Tensor) -> Tensor:
-        """Apply self-attention, cross-attention, and an FFN update."""
-
         self_attention_output, _ = self.self_attention(
             trajectory_tokens,
             trajectory_tokens,
@@ -90,8 +85,6 @@ class DecoderLayer(nn.Module):
 
 
 class MultiModalDecoder(nn.Module):
-    """Decode one future trajectory per candidate goal for each agent."""
-
     def __init__(
         self,
         num_layers: int = 8,
@@ -148,16 +141,6 @@ class MultiModalDecoder(nn.Module):
         goals: Tensor,
         goal_probabilities: Tensor,
     ) -> Tensor:
-        """Decode multi-modal future trajectories from context and goal proposals.
-
-        Args:
-            scene_embeddings: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            goals: Tensor of shape ``(batch, agents, num_goals, 2)``.
-            goal_probabilities: Tensor of shape ``(batch, agents, num_goals)``.
-
-        Returns:
-            Tensor of shape ``(batch, agents, num_goals, future_steps, 2)``.
-        """
 
         if scene_embeddings.ndim != 4:
             raise ValueError(
@@ -234,8 +217,7 @@ class MultiModalDecoder(nn.Module):
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape and numerical-stability test."""
-
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MultiModalDecoder().to(device)
 
