@@ -1,4 +1,4 @@
-"""Loss functions for multi-modal trajectory prediction ( Now works with real data instead of synthetic )"""
+"""Loss functions for multi-modal trajectory prediction."""
 
 from __future__ import annotations
 
@@ -49,10 +49,11 @@ def compute_fde(pred: Tensor, gt: Tensor) -> Tensor:
 
 
 def best_of_k_loss(
-    pred_traj: Tensor,
+  pred_traj: Tensor,
     gt_traj: Tensor,
     ade_weight: float = 1.0,
     fde_weight: float = 1.0,
+    smooth_weight: float = 0.001,  # New hyperparameter
     return_metrics: bool = False,
 ) -> Tensor | Tuple[Tensor, Tensor, Tensor]:
     """Compute best-of-K trajectory loss with ADE/FDE selection.
@@ -90,6 +91,9 @@ def best_of_k_loss(
     best_fde = fde_per_mode.gather(dim=-1, index=best_mode_indices.unsqueeze(-1)).squeeze(-1)
 
     loss = ade_weight * best_ade.mean() + fde_weight * best_fde.mean()
+    if smooth_weight > 0:
+        reg_loss = compute_smoothness_loss(pred_traj)
+        loss += smooth_weight * reg_loss
     if return_metrics:
         return loss, best_ade.mean(), best_fde.mean()
     return loss
@@ -132,3 +136,35 @@ def goal_classification_loss(goal_probs: Tensor, goals: Tensor, gt_traj: Tensor)
         target_indices.reshape(-1),
         reduction="mean",
     )
+
+
+
+def compute_smoothness_loss(pred_traj: Tensor) -> Tensor:
+    """Compute the smoothness regularization loss (second-order difference).
+    
+    This penalizes high acceleration/jerk in the predicted trajectories to 
+    ensure physically feasible paths.
+
+    Args:
+        pred_traj: Predicted trajectories of shape ``(batch, agents, modes, future_steps, 2)``.
+
+    Returns:
+        Scalar tensor representing the mean smoothness penalty.
+    """
+    if pred_traj.ndim != 5:
+        raise ValueError(
+            f"pred_traj must have shape (batch, agents, modes, future_steps, 2), "
+            f"but received {tuple(pred_traj.shape)}."
+        )
+
+    # Calculate velocity: delta_x = x_{t} - x_{t-1}
+    # Shape becomes (batch, agents, modes, future_steps - 1, 2)
+    velocity = pred_traj[..., 1:, :] - pred_traj[..., :-1, :]
+
+    # Calculate acceleration (curvature): delta_v = v_{t} - v_{t-1}
+    # Shape becomes (batch, agents, modes, future_steps - 2, 2)
+    acceleration = velocity[..., 1:, :] - velocity[..., :-1, :]
+
+    # We use the L2 norm squared to penalize large jumps more heavily
+    # Mean over all dimensions to return a scalar loss
+    return torch.mean(acceleration**2)
