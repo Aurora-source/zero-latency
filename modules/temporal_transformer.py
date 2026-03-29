@@ -1,5 +1,3 @@
-"""Temporal transformer encoder for agent trajectory histories."""
-
 from __future__ import annotations
 
 import math
@@ -12,17 +10,6 @@ __all__ = ["PositionalEncoding", "TransformerLayer", "TemporalTransformer"]
 
 
 class PositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding for temporal transformer inputs.
-
-    The class supports both ``(batch, time, embed_dim)`` and
-    ``(batch, time, agents, embed_dim)`` tensors.
-
-    Args:
-        embed_dim: Feature dimension of the input embeddings.
-        dropout: Dropout applied after positional encodings are added.
-        max_len: Initial sequence length to precompute.
-    """
-
     def __init__(
         self,
         embed_dim: int,
@@ -47,8 +34,6 @@ class PositionalEncoding(nn.Module):
         )
 
     def forward(self, inputs: Tensor) -> Tensor:
-        """Add sinusoidal positional encodings to the input tensor."""
-
         if inputs.ndim not in (3, 4):
             raise ValueError(
                 "PositionalEncoding expects a tensor with 3 or 4 dimensions, "
@@ -72,8 +57,6 @@ class PositionalEncoding(nn.Module):
         device: torch.device,
         dtype: torch.dtype,
     ) -> Tensor:
-        """Fetch or lazily extend the positional encoding buffer."""
-
         if sequence_length > self.positional_encoding.size(0):
             self.positional_encoding = self._build_encoding(
                 sequence_length,
@@ -89,8 +72,6 @@ class PositionalEncoding(nn.Module):
         embed_dim: int,
         device: Optional[torch.device] = None,
     ) -> Tensor:
-        """Construct sinusoidal positional encodings."""
-
         position = torch.arange(sequence_length, device=device, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, embed_dim, 2, device=device, dtype=torch.float32)
@@ -104,8 +85,6 @@ class PositionalEncoding(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    """Single temporal transformer encoder layer."""
-
     def __init__(
         self,
         embed_dim: int,
@@ -150,8 +129,6 @@ class TransformerLayer(nn.Module):
         padding_mask: Optional[Tensor] = None,
         attention_mask: Optional[Tensor] = None,
     ) -> Tensor:
-        """Apply temporal self-attention followed by a feedforward network."""
-
         attention_output, _ = self.self_attention(
             inputs,
             inputs,
@@ -169,8 +146,6 @@ class TransformerLayer(nn.Module):
 
 
 class TemporalTransformer(nn.Module):
-    """Temporal transformer encoder over the time dimension for each agent."""
-
     def __init__(
         self,
         num_layers: int = 16,
@@ -224,18 +199,6 @@ class TemporalTransformer(nn.Module):
         padding_mask: Optional[Tensor] = None,
         use_causal_mask: bool = False,
     ) -> Tensor:
-        """Encode temporal motion patterns for each agent independently.
-
-        Args:
-            inputs: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            padding_mask: Optional boolean-compatible tensor of shape ``(batch, time)``.
-                ``True`` values mark padded timesteps that should be ignored.
-            use_causal_mask: Whether to prevent attention to future timesteps.
-
-        Returns:
-            Tensor of shape ``(batch, time, agents, embed_dim)``.
-        """
-
         if inputs.ndim != 4:
             raise ValueError(
                 f"Expected inputs with 4 dimensions (batch, time, agents, embed_dim), "
@@ -303,8 +266,6 @@ class TemporalTransformer(nn.Module):
         time_steps: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and normalize a padding mask to boolean form."""
-
         if padding_mask is None:
             return None
         if padding_mask.shape != (batch_size, time_steps):
@@ -319,7 +280,6 @@ class TemporalTransformer(nn.Module):
         padding_mask: Optional[Tensor],
         num_agents: int,
     ) -> Optional[Tensor]:
-        """Expand a batch-level padding mask to match the flattened agent dimension."""
 
         if padding_mask is None:
             return None
@@ -332,8 +292,7 @@ class TemporalTransformer(nn.Module):
 
     @staticmethod
     def _build_causal_mask(time_steps: int, device: torch.device) -> Tensor:
-        """Create an upper-triangular causal mask over the temporal dimension."""
-
+        
         return torch.triu(
             torch.ones(time_steps, time_steps, device=device, dtype=torch.bool),
             diagonal=1,
@@ -341,8 +300,7 @@ class TemporalTransformer(nn.Module):
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape test with dummy temporal embeddings."""
-
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TemporalTransformer().to(device)
 
