@@ -1,5 +1,3 @@
-"""Social interaction transformer over agent neighborhoods."""
-
 from __future__ import annotations
 
 import math
@@ -12,8 +10,6 @@ __all__ = ["SocialTransformerLayer", "SocialTransformer"]
 
 
 class SocialTransformerLayer(nn.Module):
-    """Single spatial transformer layer over the agent dimension."""
-
     def __init__(
         self,
         embed_dim: int,
@@ -53,8 +49,6 @@ class SocialTransformerLayer(nn.Module):
         self.feedforward_norm = nn.LayerNorm(embed_dim)
 
     def forward(self, inputs: Tensor, attention_bias: Optional[Tensor] = None) -> Tensor:
-        """Apply socially-aware self-attention followed by a feedforward block."""
-
         attention_output, _ = self.self_attention(
             inputs,
             inputs,
@@ -71,13 +65,6 @@ class SocialTransformerLayer(nn.Module):
 
 
 class SocialTransformer(nn.Module):
-    """Graph-style transformer that models agent-to-agent interactions per timestep.
-
-    The module expects embeddings from the temporal encoder and performs attention
-    over the agent dimension at each timestep after reshaping ``(B, T, N, D)`` to
-    ``(B * T, N, D)``.
-    """
-
     def __init__(
         self,
         num_layers: int = 6,
@@ -143,20 +130,6 @@ class SocialTransformer(nn.Module):
         agent_mask: Optional[Tensor] = None,
         agent_types: Optional[Tensor] = None,
     ) -> Tensor:
-        """Apply spatial social attention across agents at each timestep.
-
-        Args:
-            inputs: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            positions: Tensor of shape ``(batch, time, agents, 2)``.
-            agent_mask: Optional boolean-compatible mask of shape ``(batch, time, agents)``.
-                ``True`` values mark padded agents that should be ignored.
-            agent_types: Optional integer tensor of shape ``(batch, agents)`` or
-                ``(batch, time, agents)``. When omitted, the module relies on the
-                type information already encoded by ``InputEmbedding``.
-
-        Returns:
-            Tensor of shape ``(batch, time, agents, embed_dim)``.
-        """
 
         if inputs.ndim != 4:
             raise ValueError(
@@ -235,8 +208,6 @@ class SocialTransformer(nn.Module):
         flat_agent_mask: Optional[Tensor],
         output_dtype: torch.dtype,
     ) -> Tensor:
-        """Construct additive spatial attention bias from pairwise distances."""
-
         sigma = self.log_distance_sigma.float().exp().clamp_min(1e-6)
         pairwise_distances = torch.cdist(flat_positions, flat_positions, p=2)
         attention_bias = (-pairwise_distances / sigma).to(dtype=output_dtype)
@@ -269,8 +240,6 @@ class SocialTransformer(nn.Module):
         num_agents: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and broadcast agent types when provided."""
-
         if agent_types is None:
             return None
 
@@ -300,8 +269,6 @@ class SocialTransformer(nn.Module):
         num_agents: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and normalize an agent padding mask to boolean form."""
-
         if agent_mask is None:
             return None
         if agent_mask.shape != (batch_size, time_steps, num_agents):
@@ -313,8 +280,6 @@ class SocialTransformer(nn.Module):
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape test with dummy embeddings and positions."""
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SocialTransformer().to(device)
 
