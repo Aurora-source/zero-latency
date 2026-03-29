@@ -1,4 +1,3 @@
-"""Evaluate trained model on nuScenes mini — reports ADE and FDE."""
 from __future__ import annotations
 import torch
 from torch.utils.data import DataLoader
@@ -30,9 +29,7 @@ def load_model(checkpoint_path: str, device: torch.device):
         "decoder":   MultiModalDecoder(future_steps=12),
     }).to(device)
 
-    # Handle both new (unified) and old (module-wise) checkpoint formats
     if "model" in checkpoint:
-        # new format — single model state dict
         from modules.decoder.goal_prediction import GoalPredictionNetwork as G
         from modules.decoder.multimodal_decoder import MultiModalDecoder as D
         from modules.input_embedding import InputEmbedding as E
