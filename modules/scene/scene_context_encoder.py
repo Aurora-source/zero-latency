@@ -1,5 +1,3 @@
-"""Scene context cross-attention encoder for map-aware trajectory reasoning."""
-
 from __future__ import annotations
 
 from typing import Optional, Tuple
@@ -11,8 +9,6 @@ __all__ = ["SceneContextLayer", "SceneContextEncoder"]
 
 
 class SceneContextLayer(nn.Module):
-    """Single cross-attention layer from agents to map elements."""
-
     def __init__(
         self,
         embed_dim: int,
@@ -58,8 +54,7 @@ class SceneContextLayer(nn.Module):
         attention_mask: Optional[Tensor] = None,
         zero_attention_queries: Optional[Tensor] = None,
     ) -> Tensor:
-        """Apply map cross-attention followed by a feedforward block."""
-
+        
         attention_output, _ = self.cross_attention(
             query=query_tokens,
             key=map_tokens,
@@ -83,8 +78,6 @@ class SceneContextLayer(nn.Module):
 
 
 class SceneContextEncoder(nn.Module):
-    """Cross-attention encoder that injects vectorized map context into agents."""
-
     def __init__(
         self,
         num_layers: int = 4,
@@ -144,21 +137,6 @@ class SceneContextEncoder(nn.Module):
         map_positions: Optional[Tensor] = None,
         agent_mask: Optional[Tensor] = None,
     ) -> Tensor:
-        """Fuse scene context into agent embeddings via cross-attention.
-
-        Args:
-            agent_embeddings: Tensor of shape ``(batch, time, agents, embed_dim)``.
-            map_features: Tensor of shape ``(batch, map_elements, map_dim)``.
-            map_padding_mask: Optional boolean-compatible mask of shape
-                ``(batch, map_elements)`` where ``True`` marks invalid map elements.
-            agent_positions: Optional tensor of shape ``(batch, time, agents, 2)``.
-            map_positions: Optional tensor of shape ``(batch, map_elements, 2)``.
-            agent_mask: Optional boolean-compatible mask of shape
-                ``(batch, time, agents)`` to preserve padded agents through this stage.
-
-        Returns:
-            Tensor of shape ``(batch, time, agents, embed_dim)``.
-        """
 
         if agent_embeddings.ndim != 4:
             raise ValueError(
@@ -277,8 +255,6 @@ class SceneContextEncoder(nn.Module):
         map_positions: Optional[Tensor],
         device: torch.device,
     ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
-        """Build a per-query map mask from padding and optional spatial filtering."""
-
         num_queries = time_steps * num_agents
         base_mask = torch.zeros(
             batch_size,
@@ -297,9 +273,6 @@ class SceneContextEncoder(nn.Module):
         zero_attention_queries: Optional[Tensor] = None
         blocked = base_mask
 
-        # NOTE:
-        # Spatial filtering is optional.
-        # If map_positions is not provided, full attention over map features is used.
         if map_positions is not None and agent_positions is not None:
             flat_agent_positions = agent_positions.to(device=device, dtype=torch.float32).reshape(
                 batch_size,
@@ -341,8 +314,6 @@ class SceneContextEncoder(nn.Module):
         num_agents: int,
         num_map_elements: int,
     ) -> None:
-        """Validate optional spatial-filtering position tensors."""
-
         if map_positions is None:
             return
         if agent_positions is None:
@@ -365,8 +336,6 @@ class SceneContextEncoder(nn.Module):
         num_map_elements: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and normalize a map padding mask to boolean form."""
-
         if map_padding_mask is None:
             return None
         if map_padding_mask.shape != (batch_size, num_map_elements):
@@ -384,8 +353,6 @@ class SceneContextEncoder(nn.Module):
         num_agents: int,
         device: torch.device,
     ) -> Optional[Tensor]:
-        """Validate and normalize an optional agent padding mask to boolean form."""
-
         if agent_mask is None:
             return None
         if agent_mask.shape != (batch_size, time_steps, num_agents):
@@ -397,8 +364,6 @@ class SceneContextEncoder(nn.Module):
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape test with dummy agents and map features."""
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SceneContextEncoder().to(device)
 
