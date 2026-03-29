@@ -1,5 +1,3 @@
-"""Input embedding module for transformer-based trajectory prediction."""
-
 from __future__ import annotations
 
 import math
@@ -12,27 +10,6 @@ __all__ = ["InputEmbedding"]
 
 
 class InputEmbedding(nn.Module):
-    """Embed raw per-agent trajectory features into transformer-ready tokens.
-
-    The module expects a 4D tensor with shape ``(batch, time, agents, features)``.
-    By default, the first eight feature slots are treated as continuous inputs for
-    the motion encoder, the heading angle is read from ``heading_index`` and
-    converted to a sine/cosine representation, and the final feature slot is used
-    as the categorical agent type for an embedding lookup.
-
-    Args:
-        continuous_dim: Number of continuous features passed to the linear encoder.
-        embedding_dim: Output embedding size.
-        continuous_hidden_dim: Hidden size of the continuous feature encoder.
-        type_embedding_dim: Embedding size for categorical agent types.
-        num_types: Number of supported agent categories.
-        dropout: Dropout probability applied after the fusion projection.
-        heading_index: Index of the raw heading feature in the last dimension.
-        type_index: Index of the categorical type feature in the last dimension.
-        continuous_indices: Explicit feature indices for the continuous encoder.
-            When ``None``, the first ``continuous_dim`` features are used.
-    """
-
     def __init__(
         self,
         continuous_dim: int = 8,
@@ -95,15 +72,6 @@ class InputEmbedding(nn.Module):
         self.dropout = nn.Dropout(self.dropout_p)
 
     def forward(self, inputs: Tensor) -> Tensor:
-        """Embed raw trajectory inputs.
-
-        Args:
-            inputs: Tensor of shape ``(batch, time, agents, features)``.
-
-        Returns:
-            Tensor of shape ``(batch, time, agents, embedding_dim)``.
-        """
-
         if inputs.ndim != 4:
             raise ValueError(
                 f"Expected inputs with 4 dimensions (batch, time, agents, features), "
@@ -139,8 +107,6 @@ class InputEmbedding(nn.Module):
 
     @staticmethod
     def _encode_heading(heading: Tensor) -> Tensor:
-        """Encode a heading angle in radians as sine and cosine features."""
-
         return torch.stack((torch.sin(heading), torch.cos(heading)), dim=-1)
 
     def _select_continuous_features(self, inputs: Tensor, feature_dim: int) -> Tensor:
@@ -164,8 +130,6 @@ class InputEmbedding(nn.Module):
 
     @staticmethod
     def _resolve_index(index: int, feature_dim: int) -> int:
-        """Resolve possibly negative feature indices against the runtime feature size."""
-
         resolved_index = index if index >= 0 else feature_dim + index
         if resolved_index < 0 or resolved_index >= feature_dim:
             raise ValueError(
@@ -175,8 +139,6 @@ class InputEmbedding(nn.Module):
 
 
 def _run_smoke_test() -> None:
-    """Run a minimal shape test with dummy nuScenes-like inputs."""
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size, time_steps, num_agents = 2, 6, 4
 
