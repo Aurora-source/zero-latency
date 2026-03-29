@@ -307,7 +307,6 @@ def update_best_checkpoints(checkpoint: Dict[str, object], checkpoint_dir: Path)
         if path.exists():
             path.unlink()
 
-
 def load_resume_checkpoint(
     model: nn.Module,
     criterion: nn.Module,
@@ -327,16 +326,29 @@ def load_resume_checkpoint(
             continue
         try:
             checkpoint = torch.load(resume_path, map_location=device)
+            
+            # 1. Load model weights safely (This is the critical part!)
             load_model_state(model, checkpoint)
             
+            # 2. Load loss weights safely (strict=False ignores the missing Frenet parameters)
             if "criterion" in checkpoint:
-                criterion.load_state_dict(checkpoint["criterion"])
+                criterion.load_state_dict(checkpoint["criterion"], strict=False)
                 
+            # 3. Try to load optimizer, but DON'T crash if the parameters mismatch
             if "optimizer" in checkpoint:
-                optimizer.load_state_dict(checkpoint["optimizer"])
-                move_optimizer_state(optimizer, device)
+                try:
+                    optimizer.load_state_dict(checkpoint["optimizer"])
+                    move_optimizer_state(optimizer, device)
+                except ValueError as e:
+                    print(f"⚠️ Optimizer mismatch: {e}. Keeping pre-trained model weights but resetting optimizer.")
+                    
+            # 4. Safely load scheduler
             if "scheduler" in checkpoint:
-                scheduler.load_state_dict(checkpoint["scheduler"])
+                try:
+                    scheduler.load_state_dict(checkpoint["scheduler"])
+                except Exception:
+                    pass
+                    
             if scaler is not None and scaler.is_enabled() and checkpoint.get("scaler") is not None:
                 scaler.load_state_dict(checkpoint["scaler"])
                 
@@ -355,7 +367,6 @@ def load_resume_checkpoint(
             
     print("No compatible checkpoint found, starting from scratch.")
     return 0, 0, float("inf")
-
 
 def maybe_compile_model(model: nn.Module, config: TrainConfig, device: torch.device) -> nn.Module:
     if not config.use_compile or device.type != "cuda" or not hasattr(torch, "compile"):
