@@ -1,5 +1,3 @@
-"""Minimal nuScenes dataset loader for trajectory prediction."""
-
 from __future__ import annotations
 
 import math
@@ -12,9 +10,9 @@ from torch.utils.data import Dataset
 try:
     from nuscenes import NuScenes
     from nuscenes.prediction import PredictHelper
-except ImportError as exc:  # pragma: no cover - import is validated at runtime.
-    NuScenes = None  # type: ignore[assignment]
-    PredictHelper = None  # type: ignore[assignment]
+except ImportError as exc:
+    NuScenes = None
+    PredictHelper = None
     _NUSCENES_IMPORT_ERROR = exc
 else:
     _NUSCENES_IMPORT_ERROR = None
@@ -25,25 +23,6 @@ __all__ = ["NuScenesDataset"]
 
 
 class NuScenesDataset(Dataset[Dict[str, Tensor]]):
-    """Minimal scene-level nuScenes dataset for trajectory prediction.
-
-    Each dataset item corresponds to one nuScenes sample token. Up to
-    ``max_agents`` annotated agents with sufficient history and future context are
-    selected, sorted by current distance to the ego vehicle, and padded with zeros
-    when fewer agents are available.
-
-    Returned tensors use a fixed shape contract:
-
-    - ``x``: ``(past_steps, max_agents, 8)`` with features
-      ``[x, y, vx, vy, ax, ay, heading, type]``.
-    - ``positions``: ``(past_steps, max_agents, 2)``.
-    - ``future``: ``(max_agents, future_steps, 2)``.
-    - ``map``: dummy zero tensor for downstream compatibility.
-
-    Coordinates are normalized into the current ego frame of the sample.
-
-    Supported versions: v1.0-mini, v1.0-trainval, v1.0-test
-    """
 
     SUPPORTED_VERSIONS = {"v1.0-mini", "v1.0-trainval", "v1.0-test"}
 
@@ -93,7 +72,7 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         self.dummy_map_elements = dummy_map_elements
 
         self.nusc = NuScenes(
-            version=self.version,        # â† was hardcoded "v1.0-mini", now uses self.version
+            version=self.version,
             dataroot=self.dataroot,
             verbose=verbose,
         )
@@ -108,13 +87,10 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
             )
 
     def __len__(self) -> int:
-        """Return the number of indexed scene samples."""
 
         return len(self.entries)
 
     def __getitem__(self, index: int) -> Dict[str, Tensor]:
-        """Load one scene sample and return padded agent tensors."""
-
         sample_token = self.entries[index]
         sample = self.nusc.get("sample", sample_token)
         ego_xy, ego_yaw = self._get_ego_pose(sample)
@@ -158,11 +134,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         }
 
     def _build_index(self) -> List[str]:
-        """Index all sample tokens by iterating through every scene in nuScenes."""
-
-        # NOTE:
-        # Using full scene iteration instead of prediction challenge splits.
-        # This avoids dependency on maps/prediction/prediction_scenes.json
         entries: List[str] = []
 
         for scene in self.nusc.scene:
@@ -176,7 +147,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return entries
 
     def _select_agent_tokens(self, sample_token: str, ego_xy: Tensor) -> List[str]:
-        """Select up to ``max_agents`` valid agents for the current sample."""
 
         annotations = self.helper.get_annotations_for_sample(sample_token)
         eligible_annotations = []
@@ -196,8 +166,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return [token for _, token in eligible_annotations[: self.max_agents]]
 
     def _has_required_context(self, annotation: Dict[str, object]) -> bool:
-        """Check whether an annotation has enough past and future steps."""
-
         prev_token = annotation["prev"]
         for _ in range(self.past_steps - 1):
             if not prev_token:
@@ -215,8 +183,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return True
 
     def _collect_past_records(self, annotation: Dict[str, object]) -> List[Dict[str, object]]:
-        """Collect ``past_steps`` records ending at the current annotation."""
-
         records = [annotation]
         prev_token = annotation["prev"]
         for _ in range(self.past_steps - 1):
@@ -229,7 +195,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return records
 
     def _collect_future_records(self, annotation: Dict[str, object]) -> List[Dict[str, object]]:
-        """Collect the next ``future_steps`` records after the current annotation."""
 
         records: List[Dict[str, object]] = []
         next_token = annotation["next"]
@@ -242,7 +207,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return records
 
     def _get_ego_pose(self, sample: Dict[str, object]) -> tuple[Tensor, float]:
-        """Return the current ego position and yaw from the LIDAR_TOP pose."""
 
         lidar_token = sample["data"]["LIDAR_TOP"]
         sample_data = self.nusc.get("sample_data", lidar_token)
@@ -254,32 +218,24 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
 
     @staticmethod
     def _records_to_xy(records: Sequence[Dict[str, object]]) -> Tensor:
-        """Convert annotation records to an ``(T, 2)`` tensor of xy positions."""
 
         return torch.tensor([record["translation"][:2] for record in records], dtype=torch.float32)
 
     def _records_to_heading(self, records: Sequence[Dict[str, object]], ego_yaw: float) -> Tensor:
-        """Convert annotation rotations to local-frame heading angles."""
-
         headings = [self._wrap_angle(self._quaternion_to_yaw(record["rotation"]) - ego_yaw) for record in records]
         return torch.tensor(headings, dtype=torch.float32)
 
     @staticmethod
     def _quaternion_to_yaw(rotation: Sequence[float]) -> float:
-        """Extract yaw from a quaternion rotation record."""
 
         return float(Quaternion(rotation).yaw_pitch_roll[0])
 
     @staticmethod
     def _wrap_angle(angle: float) -> float:
-        """Wrap an angle to ``[-pi, pi]``."""
-
         return math.atan2(math.sin(angle), math.cos(angle))
 
     @staticmethod
     def _global_to_local(points_xy: Tensor, ego_xy: Tensor, ego_yaw: float) -> Tensor:
-        """Transform global xy coordinates into the current ego frame."""
-
         relative = points_xy - ego_xy.unsqueeze(0)
         cos_yaw = math.cos(ego_yaw)
         sin_yaw = math.sin(ego_yaw)
@@ -287,8 +243,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
         return relative @ rotation.T
 
     def _differentiate(self, values: Tensor) -> Tensor:
-        """Estimate first-order derivatives with finite differences."""
-
         derivative = torch.zeros_like(values)
         derivative[0] = (values[1] - values[0]) / self.dt
         derivative[-1] = (values[-1] - values[-2]) / self.dt
@@ -298,8 +252,6 @@ class NuScenesDataset(Dataset[Dict[str, Tensor]]):
 
     @staticmethod
     def _category_to_type(category_name: str, raise_on_unknown: bool = True) -> Optional[int]:
-        """Map nuScenes category names to coarse trajectory agent types."""
-
         if category_name.startswith("human.pedestrian"):
             return 1
         if category_name in {"vehicle.bicycle", "vehicle.motorcycle"}:
