@@ -1,4 +1,3 @@
-"""Enhanced evaluation script — nuScenes trainval, full metrics, and saved plots."""
 from __future__ import annotations
 
 import argparse
@@ -6,7 +5,7 @@ import os
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend — works without display
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
@@ -22,17 +21,11 @@ from modules.social.social_transformer import SocialTransformer
 from modules.temporal_transformer import TemporalTransformer
 from utils.losses import best_of_k_loss
 
-# --- Default config ---
 CHECKPOINT_PATH = "checkpoints/best_1.pt"
 DATAROOT        = "data/raw/nuscenes"        
 VERSION         = "v1.0-trainval"
 BATCH_SIZE      = 4
 OUTPUT_DIR      = "evaluation_results"
-
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
 
 class TrajectoryPredictor(torch.nn.Module):
     def __init__(self) -> None:
@@ -74,19 +67,14 @@ def load_model(checkpoint_path: str, device: torch.device) -> TrajectoryPredicto
     val_loss = checkpoint.get("val_metrics", {}).get("loss", "?")
     print(f"  Checkpoint epoch={epoch}  saved_val_loss={val_loss}")
     return model
-
-
-# ---------------------------------------------------------------------------
-# Metrics helpers
-# ---------------------------------------------------------------------------
-
+    
 def compute_ade_fde_per_timestep(
-    pred: torch.Tensor,   # (B, N, T, 2)
-    gt: torch.Tensor,     # (B, N, T, 2)
+    pred: torch.Tensor,
+    gt: torch.Tensor,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    diff      = (pred - gt).norm(dim=-1)               # (B, N, T)
-    per_step  = diff.mean(dim=(0, 1)).cpu().numpy()    # (T,)
-    ade_per_b = diff.mean(dim=(1, 2)).cpu().numpy()    # (B,)
+    diff      = (pred - gt).norm(dim=-1)
+    per_step  = diff.mean(dim=(0, 1)).cpu().numpy()
+    ade_per_b = diff.mean(dim=(1, 2)).cpu().numpy()
     fde_per_b = diff[:, :, -1].mean(dim=1).cpu().numpy()
     return per_step, ade_per_b, fde_per_b
 
@@ -96,11 +84,8 @@ def select_best_mode(
     gt: torch.Tensor,
 ) -> torch.Tensor:
 
-    # Handle both layouts:
-    # (B, K, N, T, 2)  OR  (B, N, K, T, 2)
 
     if traj.shape[1] == gt.shape[1]:
-        # traj is (B, N, K, T, 2) → convert to (B, K, N, T, 2)
         traj = traj.permute(0, 2, 1, 3, 4)
 
     B, K, N, T, _ = traj.shape
@@ -111,7 +96,7 @@ def select_best_mode(
         (traj - gt_exp)
         .norm(dim=-1)
         .mean(dim=(2, 3))
-    )  # (B, K)
+    )
 
     best_k = ade_k.argmin(dim=1)
 
@@ -121,11 +106,7 @@ def select_best_mode(
     ]
 
     return best_traj
-
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
-
+    
 def plot_results(metrics: dict, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -140,7 +121,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     accent3 = "#a8ff78"
     bg      = "#1a1a2e"
 
-    # 1. ADE per timestep
     ax1 = fig.add_subplot(gs[0, 0])
     T   = len(metrics["ade_per_timestep"])
     t   = np.arange(1, T + 1) * 0.5
@@ -150,7 +130,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     ax1.set_xlabel("Time (s)", color="gray"); ax1.set_ylabel("ADE (m)", color="gray")
     ax1.tick_params(colors="gray"); ax1.set_facecolor(bg); ax1.spines[:].set_color("#333")
 
-    # 2. ADE histogram
     ax2 = fig.add_subplot(gs[0, 1])
     ax2.hist(metrics["ade_per_sample"], bins=40, color=accent, alpha=0.85, edgecolor="#0d0d0d")
     ax2.axvline(metrics["mean_ade"], color=accent2, linewidth=2, linestyle="--",
@@ -162,7 +141,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     ax2.tick_params(colors="gray"); ax2.set_facecolor(bg); ax2.spines[:].set_color("#333")
     ax2.legend(fontsize=9, labelcolor="white", facecolor=bg)
 
-    # 3. FDE histogram
     ax3 = fig.add_subplot(gs[0, 2])
     ax3.hist(metrics["fde_per_sample"], bins=40, color=accent2, alpha=0.85, edgecolor="#0d0d0d")
     ax3.axvline(metrics["mean_fde"], color=accent, linewidth=2, linestyle="--",
@@ -174,7 +152,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     ax3.tick_params(colors="gray"); ax3.set_facecolor(bg); ax3.spines[:].set_color("#333")
     ax3.legend(fontsize=9, labelcolor="white", facecolor=bg)
 
-    # 4. ADE vs FDE scatter
     ax4 = fig.add_subplot(gs[1, 0])
     sc = ax4.scatter(metrics["ade_per_sample"], metrics["fde_per_sample"],
                      alpha=0.3, s=8, c=metrics["fde_per_sample"],
@@ -184,7 +161,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     ax4.set_xlabel("ADE (m)", color="gray"); ax4.set_ylabel("FDE (m)", color="gray")
     ax4.tick_params(colors="gray"); ax4.set_facecolor(bg); ax4.spines[:].set_color("#333")
 
-    # 5. CDF
     ax5 = fig.add_subplot(gs[1, 1])
     ade_s = np.sort(metrics["ade_per_sample"])
     fde_s = np.sort(metrics["fde_per_sample"])
@@ -198,7 +174,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     ax5.tick_params(colors="gray"); ax5.set_facecolor(bg); ax5.spines[:].set_color("#333")
     ax5.legend(fontsize=9, labelcolor="white", facecolor=bg)
 
-    # 6. Summary table
     ax6 = fig.add_subplot(gs[1, 2])
     ax6.axis("off"); ax6.set_facecolor(bg)
     rows = [
@@ -226,11 +201,6 @@ def plot_results(metrics: dict, output_dir: Path) -> None:
     plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d0d0d")
     plt.close()
     print(f"\nPlot saved → {save_path}")
-
-
-# ---------------------------------------------------------------------------
-# Main evaluation loop
-# ---------------------------------------------------------------------------
 
 @torch.inference_mode()
 def evaluate(
@@ -315,11 +285,6 @@ def evaluate(
     print(f"Dataset    : {version} ({dataroot})")
 
     plot_results(metrics, Path(output_dir))
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate trajectory prediction model")
