@@ -1,157 +1,345 @@
 # Zero-Latency — Trajectory Prediction Pipeline
 
-A multi-modal transformer-based trajectory prediction model trained on the nuScenes dataset. Achieves competitive ADE/FDE against state-of-the-art methods.
+A multi-modal transformer-based trajectory prediction model trained on the nuScenes dataset. The model predicts future trajectories of traffic agents (vehicles, pedestrians, cyclists) using historical motion data and scene context.
+
+---
+
+## Prediction results
+
+The visualisation below shows the model predicting 6 seconds of future trajectories for all agents in a single scene. Solid lines are the model's best prediction (minADE mode), dashed lines are ground truth, and faint lines show all K=6 predicted modes.
+
+![Multi-agent trajectory prediction](exports/multi_agent_prediction.png)
+
+---
+
+## Project overview
+
+Zero-Latency is a trajectory prediction pipeline built on a multi-stage transformer architecture. Given a sequence of past agent positions and scene context, the model predicts multiple plausible future trajectories with associated probabilities.
+
+The pipeline consists of six learned modules working in sequence:
+
+1. **InputEmbedding** — encodes raw per-agent features (position, velocity, heading, agent type) into transformer-ready tokens
+2. **TemporalTransformer** — models each agent's motion history over time
+3. **SocialTransformer** — models interactions between agents at each timestep
+4. **SceneContextEncoder** — fuses agent representations with map context via cross-attention
+5. **GoalPredictionNetwork** — predicts a distribution over likely goal positions
+6. **MultiModalDecoder** — generates K future trajectory modes conditioned on predicted goals
+
+---
+
+## Model architecture
+
+```
+Input: (batch, time=6, agents=10, features=8)
+         ↓
+InputEmbedding          ~0.5M params
+         ↓
+TemporalTransformer     ~110M params
+         ↓
+SocialTransformer       ~42M params
+         ↓
+SceneContextEncoder     ~28M params
+         ↓
+GoalPredictionNetwork   ~0.6M params
+         ↓
+MultiModalDecoder       ~82M params
+         ↓
+Output: (batch, K=6, agents, time=12, 2)
+```
+
+**Total parameters: ~263M**
+
+Each future timestep is 0.5 seconds apart — the model predicts 6 seconds into the future.
+
+---
+
+## Dataset
+
+This project uses the [nuScenes dataset](https://www.nuscenes.org/). Registration is required to download.
+
+| Version | Samples | Scenes | Size |
+|---|---|---|---|
+| `v1.0-mini` | 404 | 10 | 3.9 GB |
+| `v1.0-trainval` | 34,149 | 850 | ~300 GB (10 parts) |
+| `v1.0-test` | 6,008 | 150 | ~54 GB |
+
+Download links for aria2 are available in `data/links.txt`.
 
 ---
 
 ## Results
 
-| Metric | Value | Benchmark |
-|---|---|---|
-| Mean ADE | 1.31 m | — |
-| Mean FDE | 1.98 m | — |
-| Median ADE | 0.64 m | — |
-| Median FDE | 0.72 m | — |
+### Evaluation on v1.0-mini (404 samples)
 
-Evaluated on full nuScenes v1.0-trainval (34,149 samples).
+```
+Samples evaluated : 404
+Loss              : 1.6108
+ADE               : 0.5972 m
+FDE               : 1.0135 m
+```
+
+### Evaluation on v1.0-trainval parts 9–10 (held-out, never seen during training)
+
+The model was trained on parts 1–8 and evaluated on parts 9–10.
+
+```
+Samples evaluated : 34,149
+Mean ADE          : 0.8412 m
+Mean FDE          : 1.0704 m
+Median ADE        : 0.5231 m
+Median FDE        : 0.5819 m
+ADE p90           : 1.9242 m
+FDE p90           : 2.6094 m
+Miss Rate FDE>2m  : 16.7%
+Miss Rate FDE>4m  :  3.3%
+```
+
+### Evaluation plots
+
+![Evaluation results](evaluation_results/evaluation_results.png)
 
 ---
 
-## Repository Structure
+## Repository structure
 
 ```
 zero-latency/
-├── checkpoints/                        # Saved model weights
-│   ├── best_1.pt                       # Best validation loss checkpoint
-│   ├── best_2.pt                       # Second best checkpoint
-│   └── latest.pt                       # Most recent epoch
-├── configs/                            # Model configs
+├── checkpoints/                     # raw training checkpoints (saved during training)
+│   └── best_1.pt
+├── configs/
 ├── data/
-│   └── links.txt                       # nuScenes download links for aria2
+│   ├── processed/
+│   └── raw/
+│       └── nuscenes/                # v1.0-mini dataset goes here
 ├── dataset/
-│   └── nuscenes_dataset.py             # nuScenes loader (mini + trainval + test)
+├── evaluation_results/
+│   └── evaluation_results.png
+├── exports/                         # exported inference-ready models + visualisations
+│   ├── model_fp16.pt                # half-precision export (~500 MB)
+│   ├── model_fp32.pt                # full-precision export (~1 GB)
+│   └── multi_agent_prediction.png   # latest prediction visualisation
 ├── modules/
-│   ├── input_embedding.py
-│   ├── social/
-│   │   └── social_transformer.py
+│   ├── decoder/
 │   ├── scene/
-│   │   └── scene_context_encoder.py
-│   └── decoder/
-│       ├── goal_prediction.py
-│       └── multimodal_decoder.py
-├── pipeline-architecture/              # Architecture diagrams
+│   └── social/
+├── nuscenes/                        # v1.0-trainval dataset goes here
+│   ├── maps/
+│   ├── samples/
+│   ├── sweeps/
+│   └── v1.0-trainval/
+├── pipeline-architecture/
 ├── utils/
-│   └── losses.py                       # best_of_k_loss, goal_classification_loss
 ├── .gitignore
 ├── README.md
-├── evaluate-mini.py                    # Evaluate on v1.0-mini
-├── evaluate-trainval.py                # Evaluate on v1.0-trainval with plots
+├── evaluate-mini.py
+├── evaluate-trainval.py
+├── export_model.py                  # exports best checkpoint → exports/ folder
 ├── requirements.txt
-├── setup.sh                            # Cloud environment setup script
-├── train-linux-32GB-VRAM.py            # Cloud training (RTX 5090, Linux)
-└── train-windows-8GB-VRAM.py           # Local training (RTX 5070 Laptop, Windows)
+├── setup.sh
+├── single_inference.py              # run inference + visualise a single random scene
+├── train-linux-32GB-VRAM.py
+└── train-windows-8GB-VRAM.py
 ```
 
 ---
 
-## Quick Start — Local (Windows, 8GB VRAM)
+## Configuring file paths
 
-### 1. Clone and install
+Every script in this repo has a **CONFIG block near the top** — this is the only place you need to edit paths. Nothing is hardcoded anywhere else.
+
+### `single_inference.py`
+
+```python
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
+CHECKPOINT  = r"C:/path/to/your/exports/model_fp32.pt"   # ← exported model
+DATAROOT    = r"C:/path/to/your/data/raw/nuscenes"        # ← mini dataset root
+VERSION     = "v1.0-mini"
+```
+
+Change `CHECKPOINT` to wherever you saved your exported model, and `DATAROOT` to wherever you extracted the nuScenes mini dataset. Use raw strings (`r"..."`) on Windows to avoid backslash issues.
+
+### `evaluate-mini.py` / `evaluate-trainval.py`
+
+Both evaluation scripts follow the same pattern — look for the `DATAROOT` and `CHECKPOINT` variables at the top and update them to match your local paths.
+
+### `export_model.py`
+
+```python
+CHECKPOINT_DIR = "checkpoints"    # ← folder containing best_1.pt
+EXPORT_DIR     = "exports"        # ← where model_fp32.pt and model_fp16.pt are written
+```
+
+If you store your checkpoints in a different folder, update `CHECKPOINT_DIR`.
+
+> **Tip:** All pre-trained model weights (`model_fp16.pt`, `model_fp32.pt`, `best_1.pt`) are available in the shared Google Drive folder linked in the [Setup](#setup--installation) section below. You do not need to train from scratch to run inference.
+
+---
+
+## Setup & installation
+
+### Windows (8 GB VRAM)
+
+#### 1. Clone the repo
 
 ```powershell
 git clone https://github.com/Aurora-source/zero-latency.git
 cd zero-latency
 git checkout working-rikon
+```
 
+#### 2. Create a virtual environment
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+```
+
+#### 3. Install PyTorch (CUDA 12.8 nightly)
+
+```powershell
 pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-pip install -r requirements.txt
 ```
 
-### 2. Train on nuScenes mini
+#### 4. Install Python dependencies
 
 ```powershell
-python train-windows-8GB-VRAM.py
+pip install cachetools==7.0.5 colorama==0.4.6 contourpy==1.3.3 cycler==0.12.1 descartes==1.1.0 filelock==3.25.2 fire==0.7.1 fonttools==4.62.1 fsspec==2026.2.0 Jinja2==3.1.6 joblib==1.5.3 kiwisolver==1.5.0 MarkupSafe==3.0.3 matplotlib==3.10.8 mpmath==1.3.0 networkx==3.6.1 numpy==2.4.3 opencv-python-headless==4.13.0.92 packaging==26.0 pandas==3.0.1 parameterized==0.9.0 pillow==12.1.1 pycocotools==2.0.11 pyparsing==3.3.2 pyquaternion==0.9.9 python-dateutil==2.9.0.post0 PyYAML==6.0.3 scikit-learn==1.8.0 scipy==1.17.1 setuptools==78.1.0 shapely==2.1.2 six==1.17.0 sympy==1.14.0 termcolor==3.3.0 threadpoolctl==3.6.0 tqdm==4.67.3 typing_extensions==4.15.0 tzdata==2025.3
 ```
 
-### 3. Evaluate on mini dataset
-
 ```powershell
-python evaluate-mini.py
+pip install "nuscenes-devkit==1.2.0" --no-deps
+pip install cachetools descartes fire opencv-python-headless parameterized pycocotools pyquaternion scikit-learn scipy shapely
 ```
 
-### 4. Evaluate on trainval dataset
+#### 5. Install FFmpeg (required for animation output)
+
+`single_inference.py` saves an animated `.mp4` of the predicted trajectories. FFmpeg must be on your system PATH for this to work.
+
+**Option A — winget (Windows 10/11):**
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+**Option B — manual install:**
+1. Download a build from [ffmpeg.org/download.html](https://ffmpeg.org/download.html) (recommended: the *full* build from gyan.dev)
+2. Extract to a folder such as `C:\ffmpeg`
+3. Add `C:\ffmpeg\bin` to your system PATH:
+   - Search "Environment Variables" in the Start menu
+   - Edit `Path` under System Variables → New → `C:\ffmpeg\bin`
+4. Open a new terminal and verify:
 
 ```powershell
-python evaluate-trainval.py --dataroot "<path-location-where-trainval-dataset-is-stored>" --batch_size 32
+ffmpeg -version
+```
+
+If `ffmpeg -version` prints a version string, the animation export will work. If FFmpeg is not found, `single_inference.py` still runs and saves the static PNG — only the MP4 is skipped.
+
+#### 6. Download the nuScenes mini dataset
+
+Register at [nuscenes.org](https://www.nuscenes.org/) and download `v1.0-mini`. Extract it to:
+
+```
+data/raw/nuscenes/
+```
+
+#### 7. Download model weights
+
+All model weights are available in the shared Google Drive folder:
+
+**[Download weights from Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=drive_link)**
+
+| File | Size | Description |
+|---|---|---|
+| `best_1.pt` | ~1 GB | Raw training checkpoint |
+| `model_fp32.pt` | ~1 GB | Exported full-precision model (use for inference) |
+| `model_fp16.pt` | ~500 MB | Exported half-precision model (faster inference, slightly lower accuracy) |
+
+Place checkpoints in `checkpoints/` and exported models in `exports/`:
+
+```
+checkpoints/
+└── best_1.pt
+
+exports/
+├── model_fp32.pt
+└── model_fp16.pt
+```
+
+#### 8. (Optional) Download trainval metadata for full dataset evaluation
+
+Download the trainval metadata from the same Google Drive folder and extract it into `nuscenes/` at the repo root:
+
+```
+nuscenes/
+└── v1.0-trainval/
+    ├── scene.json
+    ├── sample.json
+    └── ...
+```
+
+Then download sensor blob parts (each ~30 GB) from [nuscenes.org](https://www.nuscenes.org/) and extract them into the same `nuscenes/` folder. All parts merge automatically into `nuscenes/samples/` and `nuscenes/sweeps/`.
+
+#### 9. Verify setup
+
+```powershell
+python -c "import torch; print(torch.__version__); print(torch.cuda.get_device_name(0))"
+ffmpeg -version
 ```
 
 ---
 
----
+### Cloud (Linux, RTX 5090 — vast.ai)
 
-## Cloud Setup (Linux, RTX 5090 — vast.ai)
-
-### 1. Run setup script
+#### 1. Run setup script
 
 ```bash
 bash setup.sh
 ```
 
-This will clone the repo, install all dependencies, install PyTorch cu128 nightly, and verify the installation.
+This clones the repo, installs all dependencies, installs PyTorch cu128 nightly, and verifies the installation.
 
-### 2. Download nuScenes dataset using aria2
+#### 2. Install FFmpeg
 
-Install aria2:
+FFmpeg is usually pre-installed on most cloud images. Verify with:
+
+```bash
+ffmpeg -version
+```
+
+If it is missing:
+
+```bash
+apt-get update && apt-get install -y ffmpeg
+```
+
+#### 3. Download nuScenes dataset
 
 ```bash
 apt-get install -y aria2
-```
 
-Copy your `links.txt` (from nuScenes download page) to the instance, then download:
-
-```bash
-# Download trainval dataset parts to nuscenes folder
 mkdir -p /workspace/zero-latency/nuscenes
 cd /workspace/zero-latency/nuscenes
 
-# Run aria2 to download all parts
-aria2c -c \
-  -j 2 \
-  -x 8 \
-  -s 8 \
-  -k 1M \
-  --file-allocation=falloc \
-  --dir=. \
-  -i links.txt
+# Copy links.txt from Google Drive
+rclone copy "Rikon:nuscenes/links.txt" .
+
+# Download all parts
+aria2c -c -j 2 -x 8 -s 8 -k 1M --file-allocation=falloc --dir=. -i links.txt
 ```
 
-**aria2 flags explained:**
-| Flag | Meaning |
-|---|---|
-| `-c` | Resume interrupted downloads |
-| `-j 2` | 2 parallel downloads |
-| `-x 8` | 8 connections per download |
-| `-s 8` | Split each file into 8 segments |
-| `--file-allocation=falloc` | Pre-allocate disk space (prevents fragmentation) |
-| `--dir=.` | Download to current directory |
-| `-i links.txt` | Read URLs from file |
-
-### 3. Extract dataset parts (one at a time to manage disk space)
+#### 4. Extract dataset (one part at a time to save disk space)
 
 ```bash
-cd /workspace/zero-latency/nuscenes
-
-# Extract metadata first (always required)
-tar -xzf v1.0-trainval_meta.tgz && rm v1.0-trainval_meta.tgz
-
-# Extract blob parts one at a time (delete after extracting to save space)
+tar -xzf v1.0-trainval_meta.tgz    && rm v1.0-trainval_meta.tgz
 tar -xzf v1.0-trainval01_blobs.tgz && rm v1.0-trainval01_blobs.tgz
 tar -xzf v1.0-trainval02_blobs.tgz && rm v1.0-trainval02_blobs.tgz
-tar -xzf v1.0-trainval03_blobs.tgz && rm v1.0-trainval03_blobs.tgz
-# ... repeat for all parts
+# repeat for remaining parts...
 ```
 
-Expected folder structure after extraction:
+Expected structure after extraction:
+
 ```
 nuscenes/
 ├── maps/
@@ -160,231 +348,128 @@ nuscenes/
 ├── samples/
 ├── sweeps/
 └── v1.0-trainval/
-    ├── scene.json
-    ├── sample.json
-    ├── instance.json
-    └── ...
 ```
 
-### 4. Train on cloud
+#### 5. Download latest checkpoint
 
 ```bash
-cd /workspace/zero-latency
+rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
+  /workspace/zero-latency/checkpoints/
+```
 
-# Train with trainval dataset (parts 1+2 = ~6000 samples)
+---
+
+## How to run
+
+### Export model weights
+
+Before running inference, export the raw training checkpoint to an inference-ready format:
+
+```powershell
+python export_model.py
+```
+
+This reads `checkpoints/best_1.pt` and writes both `exports/model_fp32.pt` and `exports/model_fp16.pt`. If you downloaded the exported weights directly from Google Drive, you can skip this step.
+
+### Single-scene inference and visualisation
+
+```powershell
+python single_inference.py
+```
+
+Picks a random moving scene from the mini dataset, runs a full forward pass, prints per-agent ADE/FDE, and saves:
+
+- `exports/multi_agent_prediction.png` — static visualisation with legend outside the plot area
+- `exports/multi_agent_prediction.mp4` — animated visualisation (requires FFmpeg)
+
+To reproduce a specific scene, set `SEED` in the CONFIG block at the top of the script to the sample index printed at the end of a previous run:
+
+```python
+SEED = 177   # ← printed as "To reproduce this scene: set SEED = 177"
+```
+
+### Training
+
+**Windows (local):**
+```powershell
+python train-windows-8GB-VRAM.py
+```
+
+**Cloud (Linux) — one run takes ~2 hours on RTX 5090:**
+```bash
 NUSCENES_ROOT=/workspace/zero-latency/nuscenes \
 TORCH_COMPILE_MODE=reduce-overhead \
 BATCH_SIZE=72 \
 EVAL_BATCH_SIZE=16 \
-TORCH_COMPILE_MODE=reduce-overhead BATCH_SIZE=32 EVAL_BATCH_SIZE=16 python train-linux-32GB-VRAM.py
+python train-linux-32GB-VRAM.py
 ```
 
----
-
-## Saving and Uploading Checkpoints with rclone
-
-### Setup rclone (one time per instance)
+Training automatically resumes from `checkpoints/best_1.pt`. To start from scratch:
 
 ```bash
-# Install rclone
-curl https://rclone.org/install.sh | sudo bash
-
-# Configure Google Drive
-rclone config
-# Follow prompts:
-# n → new remote
-# name: Rikon  (or your preferred name)
-# Storage: drive
-# Leave client_id and client_secret blank
-# scope: 1 (full access)
-# Use auto config: n  (we are on remote server)
-# Copy the URL shown → open in laptop browser → approve → paste code back
-# Configure as Shared Drive: n
-# Save with: y
+RESUME=0 python train-linux-32GB-VRAM.py
 ```
 
-### Upload checkpoints after training
+### Evaluation
+
+**Mini dataset:**
+```powershell
+python evaluate-mini.py
+```
+
+**Full trainval dataset:**
+```powershell
+python evaluate-trainval.py --dataroot "nuscenes" --batch_size 32
+```
+
+Saves plots to `evaluation_results/evaluation_results.png`.
+
+### Uploading checkpoints to Google Drive after cloud training
 
 ```bash
-# Upload best checkpoint only (recommended — ~3GB)
 rclone copy /workspace/zero-latency/checkpoints/best_1.pt \
   Rikon:zero-latency/checkpoints/ --progress
-
-# Upload all checkpoints
-rclone copy /workspace/zero-latency/checkpoints/ \
-  Rikon:zero-latency/checkpoints/ --progress
-
-# Verify upload
-rclone ls Rikon:zero-latency/checkpoints/
 ```
 
-### Download checkpoints to laptop (Windows)
+### Downloading checkpoints to Windows
 
 ```powershell
-# Install rclone on Windows
-winget install Rclone.Rclone
-
-# Configure (same steps as above but use auto config: y on Windows)
-rclone config
-
-# Download best checkpoint
-rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" "C:\Users\Rikon\zero-latency\checkpoints\"
+rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" "checkpoints\"
 ```
 
 ---
 
-## Training Configuration
+## Training configuration
 
 ### Key environment variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `NUSCENES_ROOT` | `data/raw/nuscenes` | Path to nuScenes dataset |
-| `NUSCENES_VERSION` | `v1.0-trainval` | Dataset version |
-| `DATASET_LIMIT` | `6000` | Max samples to use |
-| `BATCH_SIZE` | `32` | Micro batch size |
+| `DATASET_LIMIT` | `6000` | Max samples to load per run |
+| `BATCH_SIZE` | `72` (cloud) / `4` (Windows) | Micro batch size |
 | `GRAD_ACCUM_STEPS` | `1` | Gradient accumulation steps |
 | `LR` | `5e-5` | Learning rate |
 | `RUN_EPOCHS` | `40` | Epochs per run |
-| `RESUME` | `1` | Resume from best checkpoint |
+| `RESUME` | `1` | Auto-resume from best checkpoint |
 | `TORCH_COMPILE` | `1` | Enable torch.compile (Linux only) |
 | `CHECKPOINT_DIR` | `checkpoints` | Where to save checkpoints |
 
-### Resume training
-
-Training automatically resumes from `checkpoints/best_1.pt` on every run. To start fresh:
-
-```bash
-TORCH_COMPILE_MODE=reduce-overhead BATCH_SIZE=72 EVAL_BATCH_SIZE=16 python train-linux-32GB-VRAM.py
-```
-
 ---
 
-## Evaluation
-
-### Run full evaluation with plots
-
-```powershell
-# On local machine (mini dataset)
-python evaluate2.py --dataroot "data/raw/nuscenes" --version v1.0-mini --batch_size 16
-
-# On local machine (full trainval)
-python evaluate2.py --dataroot "<path-to-full-dataset>" --version v1.0-trainval --batch_size 40
-```
-
-Saves plots to `evaluation_results/evaluation_results.png` including:
-- Displacement error per timestep
-- ADE/FDE histograms
-- Cumulative error distribution
-- Summary metrics table
-  
----
-
-## Hardware Requirements
+## Hardware requirements
 
 | Component | Minimum | Recommended |
 |---|---|---|
 | GPU VRAM | 8 GB | 32 GB |
-| RAM | 16 GB | 64 GB |
+| RAM | 16 GB | 64 GB+ |
 | Disk | 50 GB | 500 GB |
 | CUDA | 12.8+ | 13.0+ |
 
 ### Tested configurations
 
-| Setup | Batch size | Time per 40 epochs |
-|---|---|---|
-| RTX 5070 Laptop (8GB, Windows) | 4 | ~15 min (mini) |
-| RTX 5090 Cloud (32GB, Linux) | 32-64 | ~8 min (mini) |
-
----
-
-## Dataset
-
-This project uses the [nuScenes dataset](https://www.nuscenes.org/).
-
-Supported versions:
-- `v1.0-mini` — 404 samples, 10 scenes (for local testing)
-- `v1.0-trainval` — 34,149 samples, 850 scenes (for full training)
-- `v1.0-test` — 6,008 samples, 150 scenes (no annotations, for leaderboard)
-
----
-
-## setup.sh Reference
-
-```bash
-#!/bin/bash
-# setup.sh — Cloud environment setup for zero-latency
-# Run with: bash setup.sh
-
-set -e  # stop on any error
-
-echo "Cloning repo"
-git clone https://github.com/Aurora-source/zero-latency.git
-cd zero-latency
-git checkout working-rikon
-
-echo "Installing dependencies (excluding torch)"
-pip install \
-  cachetools==7.0.5 \
-  colorama==0.4.6 \
-  contourpy==1.3.3 \
-  cycler==0.12.1 \
-  descartes==1.1.0 \
-  filelock==3.25.2 \
-  fire==0.7.1 \
-  fonttools==4.62.1 \
-  fsspec==2026.2.0 \
-  Jinja2==3.1.6 \
-  joblib==1.5.3 \
-  kiwisolver==1.5.0 \
-  MarkupSafe==3.0.3 \
-  matplotlib==3.10.8 \
-  mpmath==1.3.0 \
-  networkx==3.6.1 \
-  numpy==2.4.3 \
-  "nuscenes-devkit==1.2.0" --no-deps \
-  opencv-python-headless==4.13.0.92 \
-  packaging==26.0 \
-  pandas==3.0.1 \
-  parameterized==0.9.0 \
-  pillow==12.1.1 \
-  pycocotools==2.0.11 \
-  pyparsing==3.3.2 \
-  pyquaternion==0.9.9 \
-  python-dateutil==2.9.0.post0 \
-  PyYAML==6.0.3 \
-  scikit-learn==1.8.0 \
-  scipy==1.17.1 \
-  setuptools==78.1.0 \
-  shapely==2.1.2 \
-  six==1.17.0 \
-  sympy==1.14.0 \
-  termcolor==3.3.0 \
-  threadpoolctl==3.6.0 \
-  tqdm==4.67.3 \
-  typing_extensions==4.15.0 \
-  tzdata==2025.3
-
-echo "=== Installing PyTorch (cu128 nightly) ==="
-pip install --pre torch torchvision torchaudio \
-  --index-url https://download.pytorch.org/whl/nightly/cu128
-
-echo "=== Installing remaining nuscenes-devkit deps ==="
-pip install cachetools descartes fire \
-  opencv-python-headless parameterized pycocotools \
-  pyquaternion scikit-learn scipy shapely
-
-echo "=== Verifying install ==="
-python -c "
-import torch
-print('PyTorch:', torch.__version__)
-print('CUDA available:', torch.cuda.is_available())
-print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')
-from nuscenes.nuscenes import NuScenes
-print('nuscenes: OK')
-"
-
-echo "=== Setup complete! ==="
-echo "Next: download nuscenes data using aria2 with links.txt"
-echo "Then run: NUSCENES_ROOT=/workspace/zero-latency/nuscenes python train.py"
-```
+| Setup | Script | Batch size | Time per run |
+|---|---|---|---|
+| RTX 5060 Laptop (8 GB, Windows) | `train-windows-8GB-VRAM.py` | 4 | ~15 min (mini) |
+| RTX 5070 Laptop (8 GB, Windows) | `train-windows-8GB-VRAM.py` | 4 | ~15 min (mini) |
+| RTX 5090 Cloud (32 GB, Linux) | `train-linux-32GB-VRAM.py` | 72 | ~2 hours (trainval) |
