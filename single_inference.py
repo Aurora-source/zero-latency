@@ -6,15 +6,11 @@ from pathlib import Path
 import torch
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")                              # headless — works without a display
+matplotlib.use("Agg")                         
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.animation as animation
 
-# ---------------------------------------------------------------------------
-# Resolve repo root — this file lives at zero-latency/infer_single.py
-# All other paths are relative to the same directory.
-# ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -28,10 +24,6 @@ from modules.social.social_transformer import SocialTransformer
 from modules.temporal_transformer import TemporalTransformer
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 parser = argparse.ArgumentParser(description="Single scene inference with visualisation")
 parser.add_argument("--trainval",   action="store_true", help="Use v1.0-trainval instead of v1.0-mini")
 parser.add_argument("--seed",       type=int,   default=None, help="Random seed for scene selection")
@@ -40,10 +32,6 @@ parser.add_argument("--min_move",   type=float, default=5.0,  help="Min agent mo
 parser.add_argument("--max_search", type=int,   default=200,  help="Max samples to scan (default 200)")
 args = parser.parse_args()
 
-
-# ---------------------------------------------------------------------------
-# Paths — all relative to REPO_ROOT
-# ---------------------------------------------------------------------------
 
 MODEL_PATH = REPO_ROOT / "models" / "model_fp32.pt"
 
@@ -62,30 +50,23 @@ OUTPUT_MP4 = OUTPUT_DIR / "multi_agent_prediction.mp4"
 
 MIN_TOTAL_MOVEMENT = args.min_move
 MAX_SEARCH         = args.max_search
-SEED               = args.seed
+SEED = args.seed if args.seed is not None else random.randint(0, 10_000_000)
 
-# Animation settings
-# Playback is slowed to 0.25× by repeating each data-frame 4 times via
-# ANIM_SPEED_MULT, while keeping the output FPS at 20 for smooth playback.
 ANIM_FPS          = 20
 ANIM_SPEED_MULT   = 4
 ANIM_DPI          = 120
 ANIM_BITRATE      = 1800
 ANIM_END_HOLD_SEC = 3
 
-print("=" * 55)
+print("+" * 55)
 print("Zero-Latency — Single Scene Inference")
-print("=" * 55)
+print("+" * 55)
 print(f"  repo root  : {REPO_ROOT}")
 print(f"  model      : {MODEL_PATH}")
 print(f"  dataset    : {VERSION}  ({DATAROOT})")
 print(f"  outputs    : {OUTPUT_DIR}")
 print(f"  seed       : {SEED if SEED is not None else 'random'}")
 
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
 
 class TrajectoryPredictor(torch.nn.Module):
     def __init__(self):
@@ -113,10 +94,6 @@ class TrajectoryPredictor(torch.nn.Module):
         return traj, goals, probs
 
 
-# ---------------------------------------------------------------------------
-# Load model
-# ---------------------------------------------------------------------------
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"\ndevice={device}")
 
@@ -134,10 +111,6 @@ model.eval()
 print("Model loaded.")
 
 
-# ---------------------------------------------------------------------------
-# Load dataset
-# ---------------------------------------------------------------------------
-
 if not DATAROOT.exists():
     raise FileNotFoundError(
         f"Dataset not found at {DATAROOT}\n"
@@ -150,10 +123,6 @@ print(f"\nLoading dataset: {VERSION}")
 dataset = NuScenesDataset(dataroot=str(DATAROOT), version=VERSION)
 print(f"Total samples: {len(dataset)}")
 
-
-# ---------------------------------------------------------------------------
-# Random moving scene selection
-# ---------------------------------------------------------------------------
 
 def scene_has_movement(sample, min_movement):
     future = sample["future"]
@@ -187,10 +156,6 @@ sample, sample_idx = find_random_moving_sample(
 )
 
 
-# ---------------------------------------------------------------------------
-# Prepare inputs
-# ---------------------------------------------------------------------------
-
 x            = sample["x"].unsqueeze(0).to(device)
 positions    = sample["positions"].unsqueeze(0).to(device)
 map_features = sample["map"].unsqueeze(0).to(device)
@@ -201,13 +166,6 @@ last_pos       = past_positions[-1]        # (N, 2) — current position
 
 num_agents = gt_future.shape[0]
 
-# ---------------------------------------------------------------------------
-# Extract agent types from x[:, :, 7]  (column 7 = type, set by dataset.py)
-#   0 = vehicle (car, truck, bus, …)
-#   1 = pedestrian
-#   2 = cyclist (bicycle / motorcycle)
-# x shape: (past_steps, max_agents, 8) — take last past step, round to int
-# ---------------------------------------------------------------------------
 
 TYPE_NAMES   = {0: "vehicle",  1: "pedestrian", 2: "cyclist"}
 TYPE_ICONS   = {0: "[V]",      1: "[P]",        2: "[C]"}
@@ -224,11 +182,7 @@ def agent_label(agent_id: int) -> str:
     return f"{TYPE_ICONS.get(t,'?')} {TYPE_NAMES.get(t,'unknown')} (Agent {agent_id})"
 
 
-# ---------------------------------------------------------------------------
-# Ground truth movement
-# ---------------------------------------------------------------------------
-
-print("\n=== GROUND TRUTH MOVEMENT ===")
+print("\n    GROUND TRUTH MOVEMENT    ")
 moving_agents = []
 for agent_id in range(num_agents):
     gt       = gt_future[agent_id].numpy()
@@ -240,15 +194,11 @@ for agent_id in range(num_agents):
 print(f"\n  Moving agents: {moving_agents}")
 
 
-# ---------------------------------------------------------------------------
-# Run inference  (single forward pass — deterministic with model.eval())
-# ---------------------------------------------------------------------------
-
 print("\nRunning inference...")
 with torch.inference_mode():
     traj, goals, probs = model(x, positions, map_features)
 
-print(f"\n=== RAW OUTPUT SHAPES ===")
+print(f"\n   RAW OUTPUT SHAPES   ")
 print(f"  traj  : {tuple(traj.shape)}")
 print(f"  goals : {tuple(goals.shape)}")
 print(f"  probs : {tuple(probs.shape)}")
@@ -269,21 +219,7 @@ else:
     mode_probs = torch.softmax(probs[0], dim=-1).cpu().numpy()
 
 
-# ---------------------------------------------------------------------------
-# ADE / FDE using minADE mode selection
-# ---------------------------------------------------------------------------
-# This is *identical* to the logic inside evaluate-mini.py:
-#   best_of_k_loss selects the mode with the lowest ADE against GT,
-#   NOT the highest-probability mode.
-# The printed numbers are therefore guaranteed to match evaluate-mini.py
-# for this sample every single time, regardless of random seed or run order,
-# because:
-#   1. model.eval() + torch.inference_mode() → fully deterministic forward pass
-#   2. mode selection is pure numpy (no stochasticity)
-#   3. ADE/FDE are computed with the same L2 formula used in evaluate-mini.py
-# ---------------------------------------------------------------------------
-
-print("\n=== PER-AGENT METRICS (minADE mode selection — matches evaluate-mini.py) ===")
+print("\n    PER-AGENT METRICS    ")
 all_ade    = []
 all_fde    = []
 best_modes = []
@@ -291,7 +227,6 @@ best_modes = []
 for agent_id in range(num_agents):
     gt = gt_future[agent_id].numpy()   # (T, 2)
 
-    # minADE selection — same criterion as best_of_k_loss in evaluate-mini.py
     best_k = min(
         range(K),
         key=lambda k: float(np.linalg.norm(traj_np[agent_id, k] - gt, axis=-1).mean())
@@ -316,63 +251,10 @@ for agent_id in range(num_agents):
 
 mean_ade = float(np.mean(all_ade))
 mean_fde = float(np.mean(all_fde))
-print(f"\n  Mean ADE : {mean_ade:.4f} m  ← identical to evaluate-mini.py")
-print(f"  Mean FDE : {mean_fde:.4f} m  ← identical to evaluate-mini.py")
+print(f"\n  Mean ADE : {mean_ade:.4f} m  ")
+print(f"  Mean FDE : {mean_fde:.4f} m  ")
 
 
-# ---------------------------------------------------------------------------
-# Consistency verification — prove this matches evaluate-mini.py every time
-# ---------------------------------------------------------------------------
-# Re-run the same forward pass a second time and assert results are bit-exact.
-# If the model is properly in eval mode and using inference_mode, the outputs
-# must be deterministic — this makes that guarantee explicit and testable.
-
-print("\n=== EVALUATE-MINI CONSISTENCY CHECK ===")
-with torch.inference_mode():
-    traj2, _, probs2 = model(x, positions, map_features)
-
-if traj2.shape[1] == num_agents:
-    traj_np2 = traj2[0].cpu().numpy()
-else:
-    traj_np2 = traj2[0].permute(1, 0, 2, 3).cpu().numpy()
-
-all_pass = True
-for agent_id in range(num_agents):
-    gt = gt_future[agent_id].numpy()
-
-    best_k2 = min(
-        range(K),
-        key=lambda k: float(np.linalg.norm(traj_np2[agent_id, k] - gt, axis=-1).mean())
-    )
-    pred2 = traj_np2[agent_id, best_k2]
-    ade2  = float(np.linalg.norm(pred2 - gt, axis=-1).mean())
-    fde2  = float(np.linalg.norm(pred2[-1] - gt[-1]))
-
-    ade_match  = abs(ade2 - all_ade[agent_id]) < 1e-6
-    fde_match  = abs(fde2 - all_fde[agent_id]) < 1e-6
-    mode_match = best_k2 == best_modes[agent_id]
-    passed     = ade_match and fde_match and mode_match
-
-    status = "MATCH" if passed else "MISMATCH"
-    print(
-        f"  Agent {agent_id:>2} | run1 ADE={all_ade[agent_id]:.4f}  run2 ADE={ade2:.4f}  "
-        f"mode {best_modes[agent_id]}=={best_k2}  [{status}]"
-    )
-    if not passed:
-        all_pass = False
-
-if all_pass:
-    print("\n  All agents: outputs are perfectly deterministic.")
-    print("  ADE/FDE printed above will match evaluate-mini.py every single run.")
-else:
-    print("\n  WARNING: Non-determinism detected — check for dropout or random ops in eval mode.")
-
-
-# ---------------------------------------------------------------------------
-# Shared plot helpers
-# ---------------------------------------------------------------------------
-
-# Tableau-10 palette — perceptually distinct, colour-blind friendly
 TABLEAU10 = [
     "#4e79a7", "#f28e2b", "#e15759", "#76b7b2",
     "#59a14f", "#edc948", "#b07aa1", "#ff9da7",
@@ -380,11 +262,11 @@ TABLEAU10 = [
 ]
 colors = TABLEAU10
 
-LEGEND_W = 2.8    # inches reserved on the right for the legend panel
+LEGEND_W = 2.8    
 
 
 def _build_legend_handles():
-    """Return legend handles: one patch per agent, then shared line-style entries."""
+   
     handles = []
 
     # Per-agent colour patches
@@ -429,16 +311,10 @@ def _make_title(extra=""):
     return (
         f"Multi-Agent Trajectory Prediction  |  Sample idx={sample_idx}  |  {VERSION}\n"
         f"Mean ADE={mean_ade:.3f} m    Mean FDE={mean_fde:.3f} m"
-        f"  (minADE — matches evaluate-mini.py)"
+        f"  (minADE )"
         f"{extra}"
     )
 
-
-# ---------------------------------------------------------------------------
-# Shared axis limits + figure dimensions
-# ---------------------------------------------------------------------------
-# Computed from past + GT + best-mode only (faint K-mode lines can stray far).
-# Percentile clipping guards against single outlier waypoints.
 
 T_past   = past_positions.shape[0]
 T_future = gt_future.shape[1]
@@ -498,10 +374,6 @@ def _add_outside_legend(fig, ax):
     return legend
 
 
-# ---------------------------------------------------------------------------
-# Draw all trajectories onto an Axes (shared by static + animation)
-# ---------------------------------------------------------------------------
-
 def _draw_static_frame(ax):
     for agent_id in range(num_agents):
         color  = colors[agent_id % len(colors)]
@@ -556,9 +428,6 @@ def _draw_static_frame(ax):
         )
 
 
-# ---------------------------------------------------------------------------
-# Static PNG
-# ---------------------------------------------------------------------------
 
 _legend_frac = LEGEND_W / fig_w
 
@@ -586,10 +455,6 @@ fig_static.savefig(str(OUTPUT_PNG), dpi=150, bbox_inches="tight")
 plt.close(fig_static)
 print(f"\nStatic PNG saved → {OUTPUT_PNG}")
 
-
-# ---------------------------------------------------------------------------
-# Animated MP4
-# ---------------------------------------------------------------------------
 
 if not args.no_anim:
     print(f"\nBuilding animation (FPS={ANIM_FPS}, speed=0.25×, DPI={ANIM_DPI}) → {OUTPUT_MP4}")
@@ -679,20 +544,20 @@ if not args.no_anim:
             past   = past_positions[:, agent_id].numpy()
             cur    = last_pos[agent_id].numpy()
 
-            # Past — grows during past phase, fully visible afterwards
+
             p_slice = past[: logical + 1] if in_past else past
             if len(p_slice) > 0:
                 arts["past_line"].set_data(p_slice[:, 0], p_slice[:, 1])
             else:
                 arts["past_line"].set_data([], [])
 
-            # Current-position dot — visible only once we reach the present
+
             if not in_past:
                 arts["cur_dot"].set_offsets(cur.reshape(1, 2))
             else:
                 arts["cur_dot"].set_offsets(np.empty((0, 2)))
 
-            # Future elements — only visible after past phase
+
             if not in_past and fut_step > 0:
                 for k, ml in enumerate(arts["mode_lines"]):
                     ml.set_data(traj_np[agent_id, k, :, 0],
@@ -753,5 +618,5 @@ if not args.no_anim:
 
     plt.close(fig_anim)
 
-print(f"\nTo reproduce this scene: python infer_single.py --seed {sample_idx}")
+print(f"\nTo reproduce this scene: python single_inference.py --seed {SEED}")
 print("Done.")
