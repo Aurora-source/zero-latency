@@ -128,16 +128,16 @@ zero-latency/
 │   └── v1.0-trainval/
 ├── pipeline-architecture/
 ├── utils/
-├── visualisations/                  # output PNGs and MP4s from infer_single.py
+├── visualisations/                  # output PNGs and MP4s from single_inference.py
 │   └── multi_agent_prediction.png
 ├── .gitignore
 ├── README.md
 ├── evaluate-mini.py
 ├── evaluate-trainval.py
-├── export_model.py                  # exports best checkpoint → models/ folder
-├── infer_single.py                  # run inference + visualise a single scene
+├── export_model.py          # exports best checkpoint → models/ folder
 ├── requirements.txt
 ├── setup.sh
+├── single_inference.py      # run inference + visualise a single scene
 ├── train-linux-32GB-VRAM.py
 └── train-windows-8GB-VRAM.py
 ```
@@ -148,7 +148,7 @@ zero-latency/
 
 Every script in this repo has a **CONFIG block near the top** — this is the only place you need to edit paths. Nothing is hardcoded anywhere else.
 
-### `infer_single.py`
+### `single_inference.py`
 
 All paths are relative to the repo root and work on any machine after cloning:
 
@@ -168,10 +168,10 @@ If you keep your dataset or model weights somewhere else, update the relevant li
 The script also accepts command-line arguments so you can override paths without editing the file:
 
 ```powershell
-python infer_single.py                     # mini dataset, random scene
-python infer_single.py --trainval          # use trainval dataset instead
-python infer_single.py --seed 42           # reproducible scene
-python infer_single.py --no_anim           # skip MP4, PNG only
+python single_inference.py                     # mini dataset, random scene
+python single_inference.py --trainval          # use trainval dataset instead
+python single_inference.py --seed 42           # reproducible scene
+python single_inference.py --no_anim           # skip MP4, PNG only
 ```
 
 ### `evaluate-mini.py` / `evaluate-trainval.py`
@@ -504,10 +504,10 @@ If you downloaded the exported weights directly from [Google Drive](https://driv
 ### Single-scene inference and visualisation
 
 ```powershell
-python infer_single.py                     # mini dataset, random scene
-python infer_single.py --trainval          # use trainval dataset instead
-python infer_single.py --seed 42           # reproducible scene
-python infer_single.py --no_anim           # skip MP4, PNG only
+python single_inference.py                     # mini dataset, random scene
+python single_inference.py --trainval          # use trainval dataset instead
+python single_inference.py --seed 42           # reproducible scene
+python single_inference.py --no_anim           # skip MP4, PNG only
 ```
 
 Picks a random moving scene, runs a full forward pass, prints per-agent ADE/FDE (guaranteed to match `evaluate-mini.py`), and saves:
@@ -518,7 +518,7 @@ Picks a random moving scene, runs a full forward pass, prints per-agent ADE/FDE 
 To reproduce a specific scene, pass `--seed` with the sample index printed at the end of any previous run:
 
 ```powershell
-python infer_single.py --seed 177
+python single_inference.py --seed 177
 # printed as: "To reproduce this scene: set SEED = 177"
 ```
 
