@@ -151,7 +151,7 @@ Every script in this repo has a **CONFIG block near the top** — this is the on
 
 ### `single_inference.py`
 
-All paths are relative to the repo root and work on any machine after cloning. If you keep your dataset or model weights somewhere else, update the relevant variables at the top of the script. Use raw strings (`r"C:\..."`) on Windows if you prefer absolute paths.
+All paths are relative to the repo root and work on any machine after cloning. If you keep your dataset or model weights somewhere else, update the relevant variables at the top of the script. Or if you want to use absolute path use raw strings (`r"C:\..."`).
 
 The script accepts command-line arguments so you can override behaviour without editing the file:
 
@@ -164,7 +164,7 @@ python single_inference.py --no_anim           # skip MP4, PNG only
 
 ### `evaluate-mini.py` / `evaluate-trainval.py`
 
-Both scripts have a config block at the top. All paths are relative to the repo root — `/` works on both Windows and Linux so prefer it over `\`.
+Both scripts have a config block at the top. All paths are relative to the repo root. If you have placed your datasets somewhere else just replace them. Or if you want to use absolute path use raw strings (`r"C:\..."`).
 
 **`evaluate-mini.py`:**
 ```python
@@ -332,10 +332,7 @@ This script handles everything in one shot — clone, checkout, all Python depen
 
 ```bash
 #!/bin/bash
-# setup.sh — Cloud environment setup for zero-latency
-# Run with: bash setup.sh
-set -e  # stop on any error
-
+set -e  
 echo "Cloning repo"
 git clone https://github.com/Aurora-source/zero-latency.git
 cd zero-latency
@@ -383,16 +380,16 @@ pip install \
   typing_extensions==4.15.0 \
   tzdata==2025.3
 
-echo "=== Installing PyTorch (cu128 nightly) ==="
+echo "    Installing PyTorch (cu128 nightly)    "
 pip install --pre torch torchvision torchaudio \
   --index-url https://download.pytorch.org/whl/nightly/cu128
 
-echo "=== Installing remaining nuscenes-devkit deps ==="
+echo "    Installing remaining nuscenes-devkit deps    "
 pip install cachetools descartes fire \
   opencv-python-headless parameterized pycocotools \
   pyquaternion scikit-learn scipy shapely
 
-echo "=== Verifying install ==="
+echo "    Verifying install    "
 python -c "
 import torch
 print('PyTorch:', torch.__version__)
@@ -402,7 +399,7 @@ from nuscenes.nuscenes import NuScenes
 print('nuscenes: OK')
 "
 
-echo "=== Setup complete! ==="
+echo "    Setup complete!    "
 echo "Next: download nuscenes data using aria2 with links.txt"
 echo "Then run: NUSCENES_ROOT=/workspace/zero-latency/nuscenes python train.py"
 ```
@@ -614,6 +611,6 @@ rclone copy /workspace/zero-latency/checkpoints/best_1.pt \
 
 | Setup | Script | Batch size | Time per run |
 |---|---|---|---|
-| RTX 5060 Laptop (8 GB, Windows) | `train-windows-8GB-VRAM.py` | 4 | ~15 min (mini) |
-| RTX 5070 Laptop (8 GB, Windows) | `train-windows-8GB-VRAM.py` | 4 | ~15 min (mini) |
-| RTX 5090 Cloud (32 GB, Linux) | `train-linux-32GB-VRAM.py` | 72 | ~2 hours (trainval) |
+| RTX 5060 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 32 | ~15 min (mini) |
+| RTX 5070 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 32 | ~12 min (mini) |
+| RTX 5090 Cloud (32 GB VRAM ,256 GB RAM , Linux) | `train-linux-32GB-VRAM.py` | 72 | ~2 hours (trainval) |
