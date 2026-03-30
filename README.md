@@ -537,7 +537,7 @@ cd /workspace/zero-latency/nuscenes
 
 # Download all parts using links.txt from the repo
 aria2c -c -j 2 -x 8 -s 8 -k 1M --file-allocation=falloc --dir=. \
-  -i /workspace/zero-latency/data/links.txt
+  -i /workspace/zero-latency/nuscenes/links.txt
 ```
 
 #### 5. Extract dataset (one part at a time to save disk space)
