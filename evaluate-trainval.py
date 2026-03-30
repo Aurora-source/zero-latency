@@ -21,10 +21,10 @@ from modules.social.social_transformer import SocialTransformer
 from modules.temporal_transformer import TemporalTransformer
 from utils.losses import best_of_k_loss
 
-CHECKPOINT_PATH = "checkpoints/best_1.pt"
+CHECKPOINT_PATH = "models/model_fp32.pt"
 DATAROOT        = "data/raw/nuscenes"        
 VERSION         = "v1.0-trainval"
-BATCH_SIZE      = 4
+BATCH_SIZE      = 32
 OUTPUT_DIR      = "evaluation_results"
 
 class TrajectoryPredictor(torch.nn.Module):
