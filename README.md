@@ -164,7 +164,24 @@ python single_inference.py --no_anim           # skip MP4, PNG only
 
 ### `evaluate-mini.py` / `evaluate-trainval.py`
 
-Both evaluation scripts follow the same pattern — look for the `DATAROOT` and `CHECKPOINT` variables at the top and update them to match your local paths.
+Both scripts have a config block at the top. All paths are relative to the repo root — `/` works on both Windows and Linux so prefer it over `\`.
+
+**`evaluate-mini.py`:**
+```python
+CHECKPOINT_PATH = "models/model_fp32.pt"
+DATAROOT        = "data/raw/nuscenes"
+VERSION         = "v1.0-mini"
+BATCH_SIZE      = 4
+```
+
+**`evaluate-trainval.py`:**
+```python
+CHECKPOINT_PATH = "models/model_fp32.pt"
+DATAROOT        = "nuscenes"
+VERSION         = "v1.0-trainval"
+BATCH_SIZE      = 64
+OUTPUT_DIR      = "evaluation_results"
+```
 
 ### `export_model.py`
 
