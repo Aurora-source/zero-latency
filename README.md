@@ -541,7 +541,7 @@ rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
 
 ---
 
-#### How to run – 
+### How to run – 
 
 All scripts provided can be run on any platform, any device and any of nuscenes dataset ( mini / trainval ) you simply need to set the right env variable for that. If that’s too much pain then stick to using the default values, i.e. let’s say to run evaluate-mini.py it by default only uses the mini dataset. Go to Key environment variables at the bottom for more info.
 
