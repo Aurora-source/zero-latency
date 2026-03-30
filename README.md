@@ -243,11 +243,20 @@ NUSCENES_ROOT=/workspace/zero-latency/nuscenes RESUME=0 python train-linux-32GB-
 
 ### Windows (8 GB VRAM)
 
+I recommend using powershell / terminal to run / evaluate. After opening just cd to your desired workspace location then start from the first step.
+
 #### 1. Clone the repo
 
 ```powershell
 git clone https://github.com/Aurora-source/zero-latency.git
 cd zero-latency
+```
+
+### `IMPORTANT NOTE :`
+If you have never enabled set execution policy, then your command “venv\Scripts\activate” used to activate the virtual environment in the next step won’t work. Run this to fix the problem : 
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
 #### 2. Create a virtual environment
@@ -299,15 +308,26 @@ If `ffmpeg -version` prints a version string, the animation export will work. If
 
 #### 6. Download the nuScenes mini dataset
 
-Register at [nuscenes.org](https://www.nuscenes.org/) and download `v1.0-mini`. Extract it to:
+The mini dataset is available in the shared Google Drive folder (the mini dataset already has meta data with it, so no need to add it separately , while working on trainval dataset requires you to download meta data separately ) :
+
+**[Download from Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing)**
+
+Extract it to:
 
 ```
 data/raw/nuscenes/
 ```
 
+(all the folder are already created in the git repo, you just need to place the extracted dataset here, or if you don’t want to move it to this directory you can set env variable for that place ->
+
+```powershell
+$env:NUSCENES_ROOT="<directory_where_dataset_is_present>"
+```
+)
+
 #### 7. Download model weights
 
-All model weights, the mini dataset, and the project presentation are available in the shared Google Drive folder:
+All model weights, the project presentation are available in the shared Google Drive folder:
 
 **[Download from Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing)**
 
@@ -315,7 +335,7 @@ The folder is organised as follows:
 
 | Folder / File | Description |
 |---|---|
-| `checkpoints/best_1.pt` | Raw training checkpoint (~1 GB) |
+| `checkpoints/best_1.pt` | Raw training checkpoint (~3.9 GB) |
 | `models/model_fp32.pt` | Exported full-precision model — recommended for inference (~1 GB) |
 | `models/model_fp16.pt` | Exported half-precision model — faster, slightly lower accuracy (~500 MB) |
 | `nuscenes/` | nuScenes mini dataset with metadata pre-compressed as `.tar` |
@@ -352,10 +372,10 @@ Then download sensor blob parts (each ~30 GB) from [nuscenes.org](https://www.nu
 python -c "import torch; print(torch.__version__); print(torch.cuda.get_device_name(0))"
 ffmpeg -version
 ```
-
+If these return the version number ,then the setup is complete. Also just once check if you have correctly place the nuscenes datasets, checkpoints, models in there respective directories as recommended. 
 ---
 
-### Cloud (Linux, RTX 5090 — vast.ai)
+### Cloud (Linux, RTX 5090, RAM – 256 GB, PyTorch (Vast) template)
 
 #### 1. Run setup script
 
@@ -477,12 +497,11 @@ rclone config
 
 #### 4. Download nuScenes dataset
 
-`links.txt` is already in the repo at `data/links.txt` — no need to download it separately.
+`links.txt` at `data/links.txt` has the links to all 10 parts of trainval dataset, as well the metadata. We use aria to manage the downloads.
 
 ```bash
 apt-get install -y aria2
 
-mkdir -p /workspace/zero-latency/nuscenes
 cd /workspace/zero-latency/nuscenes
 
 # Download all parts using links.txt from the repo
@@ -491,6 +510,8 @@ aria2c -c -j 2 -x 8 -s 8 -k 1M --file-allocation=falloc --dir=. \
 ```
 
 #### 5. Extract dataset (one part at a time to save disk space)
+
+We don’t use the nuscenes-mini dataset on cloud, only trainval dataset.
 
 ```bash
 tar -xzf v1.0-trainval_meta.tgz    && rm v1.0-trainval_meta.tgz
@@ -520,11 +541,13 @@ rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
 
 ---
 
-## How to run
+#### How to run – 
 
-### Export model weights
+All scripts provided can be run on any platform, any device and any of nuscenes dataset ( mini / trainval ) you simply need to set the right env variable for that. If that’s too much pain then stick to using the default values, i.e. let’s say to run evaluate-mini.py it by default only uses the mini dataset. Go to Key environment variables at the bottom for more info.
 
-Before running inference, export the raw training checkpoint to inference-ready formats:
+### Exporting model weights {requires checkpoints/best_1.pt to be present} (Optional if models downloaded from drive)
+
+Before running inference, export the raw training checkpoint to inference-ready formats ( but there is no need if you have already download the exported models from models folder in our [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) and placed them at models/ folder )  :
 
 ```powershell
 python export_model.py
@@ -535,9 +558,8 @@ This reads `checkpoints/best_1.pt` and writes two files into `models/`:
 - `model_fp32.pt` — full-precision weights (~1 GB)
 - `model_fp16.pt` — half-precision weights (~500 MB)
 
-If you downloaded the exported weights directly from [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing), skip this step.
 
-### Single-scene inference and visualisation
+### Single-scene inference and visualisation { requires Nuscenes mini/ trainval dataset and models/ ( model_fp32.pt is default ) }
 
 ```powershell
 python single_inference.py                     # mini dataset, random scene
@@ -546,26 +568,35 @@ python single_inference.py --seed 42           # reproducible scene
 python single_inference.py --no_anim           # skip MP4, PNG only
 ```
 
-Picks a random moving scene, runs a full forward pass, prints per-agent ADE/FDE (guaranteed to match `evaluate-mini.py`), and saves:
+Running the above, that one scene random from the available 404 scenes in the nuscenes dataset { mini or trainval , default mini } and saves:
 
-- `visualisations/multi_agent_prediction.png` — static visualisation, legend outside the plot area
+- `visualisations/multi_agent_prediction.png` — static visualisation, 
 - `visualisations/multi_agent_prediction.mp4` — animated visualisation, trajectories grow step by step (requires FFmpeg)
 
-To reproduce a specific scene, pass `--seed` with the sample index printed at the end of any previous run:
+To view the generated graph / animated graph for the specific scene please go to visualisations folder after running the command. 
+
+#### IMPORTANT NOTE :
+To reproduce a specific scene, pass `--seed` with the sample index printed at the end of any previous run, or the ADE, FDE and graph will vary according to the scene and the motion in it :
 
 ```powershell
 python single_inference.py --seed 177
 # printed as: "To reproduce this scene: set SEED = 177"
 ```
 
-### Training
+### Training {requires Nuscenes mini/ trainval dataset }
 
-**Windows (local):**
+**Windows (local, by default uses mini dataset):**
 ```powershell
 python train-windows-8GB-VRAM.py
 ```
+Training automatically resumes from `checkpoints/best_1.pt`.If best checkpoint file not found then the tranning starts from scratch, if best_1.pt present and you want to force tranning from scratch just use :
 
-**Cloud (Linux) — one run takes ~2 hours on RTX 5090:**
+```powershell
+$env:RESUME="0"; python train-windows-8GB-VRAM.py
+```
+Our tranning script has many features (to control batch sizes, eval batch sizes, lr and other things) that can be controlled through env variables both in linux and windows refer to configs section at the start of the readme or the Key environment variables section at the bottom.
+
+**Cloud (Linux, by default uses trainval dataset) — one run takes ~2 hours on RTX 5090:**
 ```bash
 NUSCENES_ROOT=/workspace/zero-latency/nuscenes \
 TORCH_COMPILE_MODE=reduce-overhead \
@@ -579,6 +610,9 @@ Training automatically resumes from `checkpoints/best_1.pt`. To start from scrat
 ```bash
 RESUME=0 python train-linux-32GB-VRAM.py
 ```
+Similarly all other env variable presented at the bottom of the readme can be used to modify the running config.
+
+IMPORTANT – please don’t try to run this script as it requires a very huge ram , lets say you even want to work with 1 part of trainval data i.e 30 GB  you would require atleast 45 GB RAM and recommended 64 GB RAM to run, the script uses ram – caching i.e it caches the entire dataset to ram, for best performance. Though you can use the DATASET_LIMIT env to limit the dataset then run it safely.
 
 ### Evaluation
 
@@ -592,7 +626,11 @@ python evaluate-mini.py
 python evaluate-trainval.py --dataroot "nuscenes" --batch_size 32
 ```
 
+Arguments -–dataroot and --batch_size can used , or you can refer to configs section present at the top of the readme to change the default configurations. 
+
 Saves plots to `evaluation_results/evaluation_results.png`.
+
+To see the generated graphs please visit the evaluation_results folder after running the command 
 
 ### Syncing checkpoints via [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing)
 
@@ -618,7 +656,7 @@ rclone copy /workspace/zero-latency/checkpoints/best_1.pt \
 
 ### Key environment variables
 
-Both training scripts read configuration from environment variables. Defaults differ between scripts — Windows targets the mini dataset, Linux targets the full trainval.
+Both training scripts read configuration from environment variables. Defaults differ between scripts — Windows targets the mini dataset, Linux targets the full trainval. Lets say you want to train using windows on the trainval dataset just change the NUSCENES_ROOT, NUSCENES_VERSION to your desired values. Defaults for all env variables mentioned :  
 
 | Variable | Windows default | Linux default | Description |
 |---|---|---|---|
@@ -648,3 +686,4 @@ Both training scripts read configuration from environment variables. Defaults di
 | RTX 5060 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 32 | ~15 min (mini) |
 | RTX 5070 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 32 | ~12 min (mini) |
 | RTX 5090 Cloud (32 GB VRAM ,256 GB RAM , Linux) | `train-linux-32GB-VRAM.py` | 72 | ~2 hours (trainval) |
+
