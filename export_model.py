@@ -10,9 +10,6 @@ from modules.social.social_transformer import SocialTransformer
 from modules.temporal_transformer import TemporalTransformer
 
 
-# ------------------------------------------------
-# Model (identical to training)
-# ------------------------------------------------
 
 class TrajectoryPredictor(torch.nn.Module):
 
@@ -36,10 +33,6 @@ class TrajectoryPredictor(torch.nn.Module):
         return traj, goals, probs
 
 
-# ------------------------------------------------
-# Dummy inputs
-# ------------------------------------------------
-
 def make_dummy_inputs():
     return (
         torch.zeros(1, 6, 10, 8),
@@ -48,9 +41,6 @@ def make_dummy_inputs():
     )
 
 
-# ------------------------------------------------
-# Load model
-# ------------------------------------------------
 
 def load_model(checkpoint_path):
     print(f"Loading checkpoint: {checkpoint_path}")
@@ -63,10 +53,6 @@ def load_model(checkpoint_path):
     return model
 
 
-# ------------------------------------------------
-# Export FP32
-# ------------------------------------------------
-
 def export_fp32(model, output_dir):
     path = output_dir / "model_fp32.pt"
     torch.save({"model": model.state_dict()}, path)
@@ -74,9 +60,6 @@ def export_fp32(model, output_dir):
     return path
 
 
-# ------------------------------------------------
-# Export FP16
-# ------------------------------------------------
 
 def export_fp16(model, output_dir):
     model_fp16 = model.half()
@@ -86,9 +69,6 @@ def export_fp16(model, output_dir):
     return path
 
 
-# ------------------------------------------------
-# Verify
-# ------------------------------------------------
 
 def verify(model):
     print("\nVerifying model...")
@@ -101,9 +81,6 @@ def verify(model):
     print("Verification passed.")
 
 
-# ------------------------------------------------
-# Main
-# ------------------------------------------------
 
 if __name__ == "__main__":
 
