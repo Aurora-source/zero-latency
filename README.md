@@ -6,10 +6,41 @@ A multi-modal transformer-based trajectory prediction model trained on the nuSce
 
 ## Prediction results
 
-The visualisation below shows the model predicting 6 seconds of future trajectories for all agents in a single scene. Solid lines are the model's best prediction (minADE mode), dashed lines are ground truth, and faint lines show all K=6 predicted modes.
+The visualisation below shows the model predicting 6 seconds of future trajectories for all agents in a single scene. Solid lines are the model's best prediction (minADE mode), dashed lines are ground truth, and faint lines show all K=6 predicted modes. Also the results change for every scene , ADE and FDE are higher for scenes with higher moving objects. ( TO REPRODUCE the exact scene presented here use python single_inference.py --seed 5575121 , the seed is important )
 
 ![Multi-agent trajectory prediction](visualisations/multi_agent_prediction.png)
 
+<video src="[https://github.com/user-attachments/assets/bb1ebaea-88d3-4d98-9b5a-b3a720f0771d]" controls width="500" autoplay muted loop playsinline></video>
+
+```python
+    GROUND TRUTH MOVEMENT
+  Agent  0 [[V] vehicle (Agent 0)]:   0.09 m  [static]
+  Agent  1 [[V] vehicle (Agent 1)]:   0.14 m  [static]
+  Agent  2 [[P] pedestrian (Agent 2)]:   6.97 m  [moving]
+  Agent  3 [[P] pedestrian (Agent 3)]:   6.88 m  [moving]
+  Agent  4 [[P] pedestrian (Agent 4)]:   7.32 m  [moving]
+  Agent  5 [[P] pedestrian (Agent 5)]:   7.24 m  [moving]
+  Agent  6 [[P] pedestrian (Agent 6)]:   8.34 m  [moving]
+  Agent  7 [[P] pedestrian (Agent 7)]:   8.49 m  [moving]
+  Agent  8 [[V] vehicle (Agent 8)]:   0.12 m  [static]
+  Agent  9 [[V] vehicle (Agent 9)]:   3.53 m  [static]
+```
+ ```python
+      PER-AGENT METRICS
+  Agent  0 [V] [vehicle] | best_mode(minADE)=2 p=0.140 | ADE=0.115m  FDE=0.116m
+  Agent  1 [V] [vehicle] | best_mode(minADE)=2 p=0.136 | ADE=0.315m  FDE=0.293m
+  Agent  2 [P] [pedestrian] | best_mode(minADE)=0 p=0.131 | ADE=1.168m  FDE=1.246m
+  Agent  3 [P] [pedestrian] | best_mode(minADE)=0 p=0.131 | ADE=0.860m  FDE=0.538m
+  Agent  4 [P] [pedestrian] | best_mode(minADE)=3 p=0.133 | ADE=0.361m  FDE=0.240m
+  Agent  5 [P] [pedestrian] | best_mode(minADE)=3 p=0.139 | ADE=0.605m  FDE=0.795m
+  Agent  6 [P] [pedestrian] | best_mode(minADE)=2 p=0.132 | ADE=0.502m  FDE=0.744m
+  Agent  7 [P] [pedestrian] | best_mode(minADE)=3 p=0.138 | ADE=0.518m  FDE=0.329m
+  Agent  8 [V] [vehicle] | best_mode(minADE)=3 p=0.131 | ADE=0.244m  FDE=0.286m
+  Agent  9 [V] [vehicle] | best_mode(minADE)=5 p=0.132 | ADE=1.288m  FDE=2.049m
+
+  Mean ADE : 0.5975 m
+  Mean FDE : 0.6637 m
+```  
 ---
 
 ## Project overview
@@ -568,7 +599,7 @@ python single_inference.py --seed 42           # reproducible scene
 python single_inference.py --no_anim           # skip MP4, PNG only
 ```
 
-Running the above, that one scene random from the available 404 scenes in the nuscenes dataset { mini or trainval , default mini } and saves:
+Running the above, that one scene random from the available 404 scenes in the nuscenes dataset { mini or trainval , default mini } , in the output its has 3 major blocks showing the ground reality {also showing if agent is static or moving } (what actually happend ) , RAW OUTPUT SHAPES and Per-Agent Matrics (ADE and FDE for predicted values for each agent) , finally caluculates the MEAN ADE and FDE then saves:
 
 - `visualisations/multi_agent_prediction.png` — static visualisation, 
 - `visualisations/multi_agent_prediction.mp4` — animated visualisation, trajectories grow step by step (requires FFmpeg)
@@ -582,7 +613,73 @@ To reproduce a specific scene, pass `--seed` with the sample index printed at th
 python single_inference.py --seed 177
 # printed as: "To reproduce this scene: set SEED = 177"
 ```
+##Sample OUTPUT :
+To reproduce this exact scene run "python single_inference.py --seed 5575121"
+```powershell
++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Zero-Latency — Single Scene Inference
++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  repo root  : D:\zero-latency
+  model      : D:\zero-latency\models\model_fp32.pt
+  dataset    : v1.0-mini  (D:\zero-latency\data\raw\nuscenes)
+  outputs    : D:\zero-latency\visualisations
+  seed       : 5575121
 
+device=cuda
+Loading model: D:\zero-latency\models\model_fp32.pt
+Model loaded.
+
+Loading dataset: v1.0-mini
+Total samples: 404
+
+Searching for a random moving scene (min_movement=5.0m)...
+SEED=5575121
+Found moving scene at index 55 (checked 3 samples)
+
+    GROUND TRUTH MOVEMENT
+  Agent  0 [[V] vehicle (Agent 0)]:   0.09 m  [static]
+  Agent  1 [[V] vehicle (Agent 1)]:   0.14 m  [static]
+  Agent  2 [[P] pedestrian (Agent 2)]:   6.97 m  [moving]
+  Agent  3 [[P] pedestrian (Agent 3)]:   6.88 m  [moving]
+  Agent  4 [[P] pedestrian (Agent 4)]:   7.32 m  [moving]
+  Agent  5 [[P] pedestrian (Agent 5)]:   7.24 m  [moving]
+  Agent  6 [[P] pedestrian (Agent 6)]:   8.34 m  [moving]
+  Agent  7 [[P] pedestrian (Agent 7)]:   8.49 m  [moving]
+  Agent  8 [[V] vehicle (Agent 8)]:   0.12 m  [static]
+  Agent  9 [[V] vehicle (Agent 9)]:   3.53 m  [static]
+
+  Moving agents: [2, 3, 4, 5, 6, 7]
+
+Running inference...
+
+   RAW OUTPUT SHAPES
+  traj  : (1, 10, 6, 12, 2)
+  goals : (1, 10, 6, 2)
+  probs : (1, 10, 6)
+
+    PER-AGENT METRICS
+  Agent  0 [V] [vehicle] | best_mode(minADE)=2 p=0.140 | ADE=0.115m  FDE=0.116m
+  Agent  1 [V] [vehicle] | best_mode(minADE)=2 p=0.136 | ADE=0.315m  FDE=0.293m
+  Agent  2 [P] [pedestrian] | best_mode(minADE)=0 p=0.131 | ADE=1.168m  FDE=1.246m
+  Agent  3 [P] [pedestrian] | best_mode(minADE)=0 p=0.131 | ADE=0.860m  FDE=0.538m
+  Agent  4 [P] [pedestrian] | best_mode(minADE)=3 p=0.133 | ADE=0.361m  FDE=0.240m
+  Agent  5 [P] [pedestrian] | best_mode(minADE)=3 p=0.139 | ADE=0.605m  FDE=0.795m
+  Agent  6 [P] [pedestrian] | best_mode(minADE)=2 p=0.132 | ADE=0.502m  FDE=0.744m
+  Agent  7 [P] [pedestrian] | best_mode(minADE)=3 p=0.138 | ADE=0.518m  FDE=0.329m
+  Agent  8 [V] [vehicle] | best_mode(minADE)=3 p=0.131 | ADE=0.244m  FDE=0.286m
+  Agent  9 [V] [vehicle] | best_mode(minADE)=5 p=0.132 | ADE=1.288m  FDE=2.049m
+
+  Mean ADE : 0.5975 m
+  Mean FDE : 0.6637 m
+
+Static PNG saved → D:\zero-latency\visualisations\multi_agent_prediction.png
+
+Building animation (FPS=20, speed=0.25×, DPI=120) → D:\zero-latency\visualisations\multi_agent_prediction.mp4
+Animation saved → D:\zero-latency\visualisations\multi_agent_prediction.mp4
+
+To reproduce this scene: python single_inference.py --seed 5575121
+Done.
+```
 ### Training {requires Nuscenes mini/ trainval dataset }
 
 Running these scripts produces best_1.pt , best_2.pt and latest.pt in the checkpoints folder. Our general concern is only best_1.pt ( which gets only when the model is able to beat the best val_loss value, best_2.pt keeps second best model for backup in case the best_1.pt gets corrupted ).
@@ -616,7 +713,7 @@ Similarly all other env variable presented at the bottom of the readme can be us
 
 IMPORTANT – please don’t try to run this script as it requires a very huge ram , lets say you even want to work with 1 part of trainval data i.e 30 GB  you would require atleast 45 GB RAM and recommended 64 GB RAM to run, the script uses ram – caching i.e it caches the entire dataset to ram, for best performance. Though you can use the DATASET_LIMIT env to limit the dataset then run it safely.
 
-### Evaluation
+### Evaluation { requires Nuscenes mini/ trainval dataset and model }
 
 **Mini dataset:**
 ```powershell
@@ -685,7 +782,7 @@ Both training scripts read configuration from environment variables. Defaults di
 
 | Setup | Script | Batch size | Time per run |
 |---|---|---|---|
-| RTX 5060 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 32 | ~15 min (mini) |
-| RTX 5070 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 32 | ~12 min (mini) |
+| RTX 5060 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 4 | ~15 min (mini) |
+| RTX 5070 Laptop (8 GB VRAM, 16 GB RAM, Windows) | `train-windows-8GB-VRAM.py` | 4 | ~12 min (mini) |
 | RTX 5090 Cloud (32 GB VRAM ,256 GB RAM , Linux) | `train-linux-32GB-VRAM.py` | 72 | ~2 hours (trainval) |
 
