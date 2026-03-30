@@ -129,7 +129,8 @@ zero-latency/
 ├── pipeline-architecture/
 ├── utils/
 ├── visualisations/                  # output PNGs and MP4s from single_inference.py
-│   └── multi_agent_prediction.png
+│   ├── multi_agent_prediction.png
+│   └── multi_agent_prediction.mp4
 ├── .gitignore
 ├── README.md
 ├── evaluate-mini.py
@@ -150,22 +151,9 @@ Every script in this repo has a **CONFIG block near the top** — this is the on
 
 ### `single_inference.py`
 
-All paths are relative to the repo root and work on any machine after cloning:
+All paths are relative to the repo root and work on any machine after cloning. If you keep your dataset or model weights somewhere else, update the relevant variables at the top of the script. Use raw strings (`r"C:\..."`) on Windows if you prefer absolute paths.
 
-```python
-# ---------------------------------------------------------------------------
-# CONFIG  (all paths relative to repo root)
-# ---------------------------------------------------------------------------
-MODEL       = "models/model_fp32.pt"      # ← exported model (fp32 or fp16)
-DATAROOT    = "data/raw/nuscenes"          # ← mini dataset root
-TRAINVAL    = "nuscenes"                   # ← trainval dataset root (--trainval flag)
-OUTPUT_DIR  = "visualisations"             # ← where PNG and MP4 are saved
-VERSION     = "v1.0-mini"
-```
-
-If you keep your dataset or model weights somewhere else, update the relevant line. Use raw strings (`r"C:\..."`) on Windows if you prefer absolute paths.
-
-The script also accepts command-line arguments so you can override paths without editing the file:
+The script accepts command-line arguments so you can override behaviour without editing the file:
 
 ```powershell
 python single_inference.py                     # mini dataset, random scene
