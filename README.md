@@ -194,7 +194,7 @@ python export_model.py --checkpoint checkpoints/best_1.pt --output models
 
 This writes two files into `models/`: `model_fp32.pt` and `model_fp16.pt`.
 
-> **Tip:** All pre-trained model weights (`model_fp16.pt`, `model_fp32.pt`, `best_1.pt`) are available in the shared Google Drive folder linked in the [Setup](#setup--installation) section below. You do not need to train from scratch to run inference.
+> **Tip:** All pre-trained model weights (`model_fp16.pt`, `model_fp32.pt`, `best_1.pt`) are available in the [shared Google Drive folder](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing). You do not need to train from scratch to run inference.
 
 ---
 
@@ -267,17 +267,21 @@ data/raw/nuscenes/
 
 #### 7. Download model weights
 
-All model weights are available in the shared Google Drive folder:
+All model weights, the mini dataset, and the project presentation are available in the shared Google Drive folder:
 
-**[Download weights from Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=drive_link)**
+**[Download from Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing)**
 
-| File | Size | Description |
-|---|---|---|
-| `best_1.pt` | ~1 GB | Raw training checkpoint |
-| `model_fp32.pt` | ~1 GB | Exported full-precision model (recommended for inference) |
-| `model_fp16.pt` | ~500 MB | Exported half-precision model (faster, slightly lower accuracy) |
+The folder is organised as follows:
 
-Place the raw checkpoint in `checkpoints/` and the exported models in `models/`:
+| Folder / File | Description |
+|---|---|
+| `checkpoints/best_1.pt` | Raw training checkpoint (~1 GB) |
+| `models/model_fp32.pt` | Exported full-precision model — recommended for inference (~1 GB) |
+| `models/model_fp16.pt` | Exported half-precision model — faster, slightly lower accuracy (~500 MB) |
+| `nuscenes/` | nuScenes mini dataset with metadata pre-compressed as `.tar` |
+| `zero-latency.pptx` | Hackathon presentation |
+
+Place the downloaded files in the correct local folders:
 
 ```
 checkpoints/
@@ -290,7 +294,7 @@ models/
 
 #### 8. (Optional) Download trainval metadata for full dataset evaluation
 
-Download the trainval metadata from the same Google Drive folder and extract it into `nuscenes/` at the repo root:
+Download the trainval metadata from the same [Google Drive folder](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) and extract it into `nuscenes/` at the repo root:
 
 ```
 nuscenes/
@@ -319,7 +323,84 @@ ffmpeg -version
 bash setup.sh
 ```
 
-This clones the repo, installs all dependencies, installs PyTorch cu128 nightly, and verifies the installation.
+This script handles everything in one shot — clone, checkout, all Python dependencies, PyTorch cu128 nightly, and a verification check at the end. The full script is reproduced below for reference:
+
+```bash
+#!/bin/bash
+# setup.sh — Cloud environment setup for zero-latency
+# Run with: bash setup.sh
+set -e  # stop on any error
+
+echo "Cloning repo"
+git clone https://github.com/Aurora-source/zero-latency.git
+cd zero-latency
+git checkout working-rikon
+
+echo "Installing dependencies (excluding torch)"
+pip install \
+  cachetools==7.0.5 \
+  colorama==0.4.6 \
+  contourpy==1.3.3 \
+  cycler==0.12.1 \
+  descartes==1.1.0 \
+  filelock==3.25.2 \
+  fire==0.7.1 \
+  fonttools==4.62.1 \
+  fsspec==2026.2.0 \
+  Jinja2==3.1.6 \
+  joblib==1.5.3 \
+  kiwisolver==1.5.0 \
+  MarkupSafe==3.0.3 \
+  matplotlib==3.10.8 \
+  mpmath==1.3.0 \
+  networkx==3.6.1 \
+  numpy==2.4.3 \
+  "nuscenes-devkit==1.2.0" --no-deps \
+  opencv-python-headless==4.13.0.92 \
+  packaging==26.0 \
+  pandas==3.0.1 \
+  parameterized==0.9.0 \
+  pillow==12.1.1 \
+  pycocotools==2.0.11 \
+  pyparsing==3.3.2 \
+  pyquaternion==0.9.9 \
+  python-dateutil==2.9.0.post0 \
+  PyYAML==6.0.3 \
+  scikit-learn==1.8.0 \
+  scipy==1.17.1 \
+  setuptools==78.1.0 \
+  shapely==2.1.2 \
+  six==1.17.0 \
+  sympy==1.14.0 \
+  termcolor==3.3.0 \
+  threadpoolctl==3.6.0 \
+  tqdm==4.67.3 \
+  typing_extensions==4.15.0 \
+  tzdata==2025.3
+
+echo "=== Installing PyTorch (cu128 nightly) ==="
+pip install --pre torch torchvision torchaudio \
+  --index-url https://download.pytorch.org/whl/nightly/cu128
+
+echo "=== Installing remaining nuscenes-devkit deps ==="
+pip install cachetools descartes fire \
+  opencv-python-headless parameterized pycocotools \
+  pyquaternion scikit-learn scipy shapely
+
+echo "=== Verifying install ==="
+python -c "
+import torch
+print('PyTorch:', torch.__version__)
+print('CUDA available:', torch.cuda.is_available())
+print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')
+from nuscenes.nuscenes import NuScenes
+print('nuscenes: OK')
+"
+
+echo "=== Setup complete! ==="
+echo "Next: download nuscenes data using aria2 with links.txt"
+echo "Then run: NUSCENES_ROOT=/workspace/zero-latency/nuscenes python train.py"
+```
 
 #### 2. Install FFmpeg
 
@@ -335,7 +416,32 @@ If it is missing:
 apt-get update && apt-get install -y ffmpeg
 ```
 
-#### 3. Download nuScenes dataset
+#### 3. Set up rclone ([Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) access)
+
+rclone is used on the cloud server to pull the latest checkpoint from [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) before training starts, and to push the new best checkpoint back up when training finishes. On Windows you don't need rclone — just use [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) in the browser directly.
+
+```bash
+# Install rclone
+curl https://rclone.org/install.sh | sudo bash
+
+# Configure Google Drive
+rclone config
+# Follow the prompts:
+#   n          → new remote
+#   name:        Rikon  (or your preferred name — use this name in all rclone commands)
+#   Storage:     drive
+#   client_id:   (leave blank)
+#   client_secret: (leave blank)
+#   scope:       1  (full access)
+#   auto config: n  (we are on a remote server with no browser)
+#   Copy the URL shown → open it in your local browser → approve access → paste the code back
+#   Shared Drive: n
+#   Confirm with: y
+```
+
+#### 4. Download nuScenes dataset
+
+`links.txt` is already in the repo at `data/links.txt` — no need to download it separately.
 
 ```bash
 apt-get install -y aria2
@@ -343,14 +449,12 @@ apt-get install -y aria2
 mkdir -p /workspace/zero-latency/nuscenes
 cd /workspace/zero-latency/nuscenes
 
-# Copy links.txt from Google Drive
-rclone copy "Rikon:nuscenes/links.txt" .
-
-# Download all parts
-aria2c -c -j 2 -x 8 -s 8 -k 1M --file-allocation=falloc --dir=. -i links.txt
+# Download all parts using links.txt from the repo
+aria2c -c -j 2 -x 8 -s 8 -k 1M --file-allocation=falloc --dir=. \
+  -i /workspace/zero-latency/data/links.txt
 ```
 
-#### 4. Extract dataset (one part at a time to save disk space)
+#### 5. Extract dataset (one part at a time to save disk space)
 
 ```bash
 tar -xzf v1.0-trainval_meta.tgz    && rm v1.0-trainval_meta.tgz
@@ -371,7 +475,7 @@ nuscenes/
 └── v1.0-trainval/
 ```
 
-#### 5. Download latest checkpoint
+#### 6. Download latest checkpoint
 
 ```bash
 rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
@@ -395,7 +499,7 @@ This reads `checkpoints/best_1.pt` and writes two files into `models/`:
 - `model_fp32.pt` — full-precision weights (~1 GB)
 - `model_fp16.pt` — half-precision weights (~500 MB)
 
-If you downloaded the exported weights directly from Google Drive, skip this step.
+If you downloaded the exported weights directly from [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing), skip this step.
 
 ### Single-scene inference and visualisation
 
@@ -454,19 +558,23 @@ python evaluate-trainval.py --dataroot "nuscenes" --batch_size 32
 
 Saves plots to `evaluation_results/evaluation_results.png`.
 
-### Uploading checkpoints to Google Drive after cloud training
+### Syncing checkpoints via [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing)
+
+**On the cloud server — pull the previous best checkpoint before training:**
+
+```bash
+rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
+  /workspace/zero-latency/checkpoints/ --progress
+```
+
+**On the cloud server — push the new best checkpoint after training finishes:**
 
 ```bash
 rclone copy /workspace/zero-latency/checkpoints/best_1.pt \
   Rikon:zero-latency/checkpoints/ --progress
 ```
 
-### Downloading model weights to Windows
-
-```powershell
-rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" "checkpoints\"
-rclone copy "Rikon:zero-latency/models/" "models\" --progress
-```
+**On Windows** — no rclone needed. Open the [shared Google Drive folder](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) in your browser to download weights, or navigate to `zero-latency/checkpoints/` in your own Drive to upload a new checkpoint after cloud training.
 
 ---
 
