@@ -10,7 +10,7 @@ The visualisation below shows the model predicting 6 seconds of future trajector
 
 ![Multi-agent trajectory prediction](visualisations/multi_agent_prediction.png)
 
-<video src="[https://github.com/user-attachments/assets/bb1ebaea-88d3-4d98-9b5a-b3a720f0771d]" controls width="500" autoplay muted loop playsinline></video>
+<video src="https://github.com/user-attachments/assets/bb1ebaea-88d3-4d98-9b5a-b3a720f0771d" controls width="500"></video>
 
 ```python
     GROUND TRUTH MOVEMENT
