@@ -199,6 +199,42 @@ python export_model.py --checkpoint checkpoints/best_1.pt --output models
 
 This writes two files into `models/`: `model_fp32.pt` and `model_fp16.pt`.
 
+### `train-windows-8GB-VRAM.py`
+
+Configured via environment variables — defaults target the mini dataset on a local Windows machine:
+
+```python
+dataset_root    = os.getenv("NUSCENES_ROOT",    "data/raw/nuscenes")
+version         = os.getenv("NUSCENES_VERSION", "v1.0-mini")
+checkpoint_dir  = os.getenv("CHECKPOINT_DIR",   "checkpoints")
+dataset_limit   = int(os.getenv("DATASET_LIMIT", "404"))
+run_epochs      = int(os.getenv("RUN_EPOCHS",    "40"))
+```
+
+Override any value by setting the env var before running, e.g.:
+
+```powershell
+$env:DATASET_LIMIT="999999"; python train-windows-8GB-VRAM.py
+```
+
+### `train-linux-32GB-VRAM.py`
+
+Same env vars, but defaults target the full trainval dataset on a cloud server:
+
+```python
+dataset_root    = os.getenv("NUSCENES_ROOT",    "nuscenes")
+version         = os.getenv("NUSCENES_VERSION", "v1.0-trainval")
+checkpoint_dir  = os.getenv("CHECKPOINT_DIR",   "checkpoints")
+dataset_limit   = int(os.getenv("DATASET_LIMIT", "999999"))
+run_epochs      = int(os.getenv("RUN_EPOCHS",    "40"))
+```
+
+Override on the command line:
+
+```bash
+NUSCENES_ROOT=/workspace/zero-latency/nuscenes RESUME=0 python train-linux-32GB-VRAM.py
+```
+
 > **Tip:** All pre-trained model weights (`model_fp16.pt`, `model_fp32.pt`, `best_1.pt`) are available in the [shared Google Drive folder](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing). You do not need to train from scratch to run inference.
 
 ---
@@ -582,17 +618,17 @@ rclone copy /workspace/zero-latency/checkpoints/best_1.pt \
 
 ### Key environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `NUSCENES_ROOT` | `data/raw/nuscenes` | Path to nuScenes dataset |
-| `DATASET_LIMIT` | `6000` | Max samples to load per run |
-| `BATCH_SIZE` | `72` (cloud) / `4` (Windows) | Micro batch size |
-| `GRAD_ACCUM_STEPS` | `1` | Gradient accumulation steps |
-| `LR` | `5e-5` | Learning rate |
-| `RUN_EPOCHS` | `40` | Epochs per run |
-| `RESUME` | `1` | Auto-resume from best checkpoint |
-| `TORCH_COMPILE` | `1` | Enable torch.compile (Linux only) |
-| `CHECKPOINT_DIR` | `checkpoints` | Where to save checkpoints |
+Both training scripts read configuration from environment variables. Defaults differ between scripts — Windows targets the mini dataset, Linux targets the full trainval.
+
+| Variable | Windows default | Linux default | Description |
+|---|---|---|---|
+| `NUSCENES_ROOT` | `data/raw/nuscenes` | `nuscenes` | Path to nuScenes dataset |
+| `NUSCENES_VERSION` | `v1.0-mini` | `v1.0-trainval` | Dataset version |
+| `CHECKPOINT_DIR` | `checkpoints` | `checkpoints` | Where to save/load checkpoints |
+| `DATASET_LIMIT` | `404` | `999999` | Max samples to load per run |
+| `RUN_EPOCHS` | `40` | `40` | Epochs per run |
+| `RESUME` | `1` | `1` | Auto-resume from best checkpoint |
+| `TORCH_COMPILE` | — | `1` | Enable torch.compile (Linux only) |
 
 ---
 
