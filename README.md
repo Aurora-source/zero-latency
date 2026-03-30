@@ -212,7 +212,6 @@ This writes two files into `models/`: `model_fp32.pt` and `model_fp16.pt`.
 ```powershell
 git clone https://github.com/Aurora-source/zero-latency.git
 cd zero-latency
-git checkout working-rikon
 ```
 
 #### 2. Create a virtual environment
@@ -336,7 +335,6 @@ set -e
 echo "Cloning repo"
 git clone https://github.com/Aurora-source/zero-latency.git
 cd zero-latency
-git checkout working-rikon
 
 echo "Installing dependencies (excluding torch)"
 pip install \
