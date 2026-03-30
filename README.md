@@ -585,6 +585,8 @@ python single_inference.py --seed 177
 
 ### Training {requires Nuscenes mini/ trainval dataset }
 
+Running these scripts produces best_1.pt , best_2.pt and latest.pt in the checkpoints folder. Our general concern is only best_1.pt ( which gets only when the model is able to beat the best val_loss value, best_2.pt keeps second best model for backup in case the best_1.pt gets corrupted ).
+
 **Windows (local, by default uses mini dataset):**
 ```powershell
 python train-windows-8GB-VRAM.py
