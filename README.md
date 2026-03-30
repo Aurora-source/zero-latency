@@ -8,7 +8,7 @@ A multi-modal transformer-based trajectory prediction model trained on the nuSce
 
 The visualisation below shows the model predicting 6 seconds of future trajectories for all agents in a single scene. Solid lines are the model's best prediction (minADE mode), dashed lines are ground truth, and faint lines show all K=6 predicted modes.
 
-![Multi-agent trajectory prediction](exports/multi_agent_prediction.png)
+![Multi-agent trajectory prediction](visualisations/multi_agent_prediction.png)
 
 ---
 
@@ -114,10 +114,9 @@ zero-latency/
 ├── dataset/
 ├── evaluation_results/
 │   └── evaluation_results.png
-├── exports/                         # exported inference-ready models + visualisations
+├── models/                          # exported inference-ready model weights
 │   ├── model_fp16.pt                # half-precision export (~500 MB)
-│   ├── model_fp32.pt                # full-precision export (~1 GB)
-│   └── multi_agent_prediction.png   # latest prediction visualisation
+│   └── model_fp32.pt                # full-precision export (~1 GB)
 ├── modules/
 │   ├── decoder/
 │   ├── scene/
@@ -129,14 +128,16 @@ zero-latency/
 │   └── v1.0-trainval/
 ├── pipeline-architecture/
 ├── utils/
+├── visualisations/                  # output PNGs and MP4s from infer_single.py
+│   └── multi_agent_prediction.png
 ├── .gitignore
 ├── README.md
 ├── evaluate-mini.py
 ├── evaluate-trainval.py
-├── export_model.py                  # exports best checkpoint → exports/ folder
+├── export_model.py                  # exports best checkpoint → models/ folder
+├── infer_single.py                  # run inference + visualise a single scene
 ├── requirements.txt
 ├── setup.sh
-├── single_inference.py              # run inference + visualise a single random scene
 ├── train-linux-32GB-VRAM.py
 └── train-windows-8GB-VRAM.py
 ```
@@ -147,18 +148,31 @@ zero-latency/
 
 Every script in this repo has a **CONFIG block near the top** — this is the only place you need to edit paths. Nothing is hardcoded anywhere else.
 
-### `single_inference.py`
+### `infer_single.py`
+
+All paths are relative to the repo root and work on any machine after cloning:
 
 ```python
 # ---------------------------------------------------------------------------
-# CONFIG
+# CONFIG  (all paths relative to repo root)
 # ---------------------------------------------------------------------------
-CHECKPOINT  = r"C:/path/to/your/exports/model_fp32.pt"   # ← exported model
-DATAROOT    = r"C:/path/to/your/data/raw/nuscenes"        # ← mini dataset root
+MODEL       = "models/model_fp32.pt"      # ← exported model (fp32 or fp16)
+DATAROOT    = "data/raw/nuscenes"          # ← mini dataset root
+TRAINVAL    = "nuscenes"                   # ← trainval dataset root (--trainval flag)
+OUTPUT_DIR  = "visualisations"             # ← where PNG and MP4 are saved
 VERSION     = "v1.0-mini"
 ```
 
-Change `CHECKPOINT` to wherever you saved your exported model, and `DATAROOT` to wherever you extracted the nuScenes mini dataset. Use raw strings (`r"..."`) on Windows to avoid backslash issues.
+If you keep your dataset or model weights somewhere else, update the relevant line. Use raw strings (`r"C:\..."`) on Windows if you prefer absolute paths.
+
+The script also accepts command-line arguments so you can override paths without editing the file:
+
+```powershell
+python infer_single.py                     # mini dataset, random scene
+python infer_single.py --trainval          # use trainval dataset instead
+python infer_single.py --seed 42           # reproducible scene
+python infer_single.py --no_anim           # skip MP4, PNG only
+```
 
 ### `evaluate-mini.py` / `evaluate-trainval.py`
 
@@ -166,12 +180,19 @@ Both evaluation scripts follow the same pattern — look for the `DATAROOT` and 
 
 ### `export_model.py`
 
-```python
-CHECKPOINT_DIR = "checkpoints"    # ← folder containing best_1.pt
-EXPORT_DIR     = "exports"        # ← where model_fp32.pt and model_fp16.pt are written
+Uses `argparse` — paths are passed as command-line arguments with sensible defaults:
+
+```powershell
+python export_model.py                                    # uses defaults below
+python export_model.py --checkpoint checkpoints/best_1.pt --output models
 ```
 
-If you store your checkpoints in a different folder, update `CHECKPOINT_DIR`.
+| Argument | Default | Description |
+|---|---|---|
+| `--checkpoint` | `checkpoints/best_1.pt` | Path to the raw training checkpoint |
+| `--output` | `models` | Folder where exported weights are written |
+
+This writes two files into `models/`: `model_fp32.pt` and `model_fp16.pt`.
 
 > **Tip:** All pre-trained model weights (`model_fp16.pt`, `model_fp32.pt`, `best_1.pt`) are available in the shared Google Drive folder linked in the [Setup](#setup--installation) section below. You do not need to train from scratch to run inference.
 
@@ -253,16 +274,16 @@ All model weights are available in the shared Google Drive folder:
 | File | Size | Description |
 |---|---|---|
 | `best_1.pt` | ~1 GB | Raw training checkpoint |
-| `model_fp32.pt` | ~1 GB | Exported full-precision model (use for inference) |
-| `model_fp16.pt` | ~500 MB | Exported half-precision model (faster inference, slightly lower accuracy) |
+| `model_fp32.pt` | ~1 GB | Exported full-precision model (recommended for inference) |
+| `model_fp16.pt` | ~500 MB | Exported half-precision model (faster, slightly lower accuracy) |
 
-Place checkpoints in `checkpoints/` and exported models in `exports/`:
+Place the raw checkpoint in `checkpoints/` and the exported models in `models/`:
 
 ```
 checkpoints/
 └── best_1.pt
 
-exports/
+models/
 ├── model_fp32.pt
 └── model_fp16.pt
 ```
@@ -363,29 +384,38 @@ rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
 
 ### Export model weights
 
-Before running inference, export the raw training checkpoint to an inference-ready format:
+Before running inference, export the raw training checkpoint to inference-ready formats:
 
 ```powershell
 python export_model.py
 ```
 
-This reads `checkpoints/best_1.pt` and writes both `exports/model_fp32.pt` and `exports/model_fp16.pt`. If you downloaded the exported weights directly from Google Drive, you can skip this step.
+This reads `checkpoints/best_1.pt` and writes two files into `models/`:
+
+- `model_fp32.pt` — full-precision weights (~1 GB)
+- `model_fp16.pt` — half-precision weights (~500 MB)
+
+If you downloaded the exported weights directly from Google Drive, skip this step.
 
 ### Single-scene inference and visualisation
 
 ```powershell
-python single_inference.py
+python infer_single.py                     # mini dataset, random scene
+python infer_single.py --trainval          # use trainval dataset instead
+python infer_single.py --seed 42           # reproducible scene
+python infer_single.py --no_anim           # skip MP4, PNG only
 ```
 
-Picks a random moving scene from the mini dataset, runs a full forward pass, prints per-agent ADE/FDE, and saves:
+Picks a random moving scene, runs a full forward pass, prints per-agent ADE/FDE (guaranteed to match `evaluate-mini.py`), and saves:
 
-- `exports/multi_agent_prediction.png` — static visualisation with legend outside the plot area
-- `exports/multi_agent_prediction.mp4` — animated visualisation (requires FFmpeg)
+- `visualisations/multi_agent_prediction.png` — static visualisation, legend outside the plot area
+- `visualisations/multi_agent_prediction.mp4` — animated visualisation, trajectories grow step by step (requires FFmpeg)
 
-To reproduce a specific scene, set `SEED` in the CONFIG block at the top of the script to the sample index printed at the end of a previous run:
+To reproduce a specific scene, pass `--seed` with the sample index printed at the end of any previous run:
 
-```python
-SEED = 177   # ← printed as "To reproduce this scene: set SEED = 177"
+```powershell
+python infer_single.py --seed 177
+# printed as: "To reproduce this scene: set SEED = 177"
 ```
 
 ### Training
@@ -431,10 +461,11 @@ rclone copy /workspace/zero-latency/checkpoints/best_1.pt \
   Rikon:zero-latency/checkpoints/ --progress
 ```
 
-### Downloading checkpoints to Windows
+### Downloading model weights to Windows
 
 ```powershell
 rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" "checkpoints\"
+rclone copy "Rikon:zero-latency/models/" "models\" --progress
 ```
 
 ---
