@@ -92,15 +92,14 @@ Each future timestep is 0.5 seconds apart — the model predicts 6 seconds into 
 
 ## Dataset
 
-This project uses the [nuScenes dataset](https://www.nuscenes.org/). Registration is required to download.
+This project uses the [nuScenes dataset](https://www.nuscenes.org/). Registration is required to download. 
 
 | Version | Samples | Scenes | Size |
 |---|---|---|---|
 | `v1.0-mini` | 404 | 10 | 3.9 GB |
 | `v1.0-trainval` | 34,149 | 850 | ~300 GB (10 parts) |
-| `v1.0-test` | 6,008 | 150 | ~54 GB |
 
-Download links for aria2 are available in `data/links.txt`.
+Download links for `v1.0-trainval` are available in `nuscenes/links.txt`.
 
 ---
 
@@ -581,7 +580,7 @@ rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
 
 All scripts provided can be run on any platform, any device and any of nuscenes dataset ( mini / trainval ) you simply need to set the right env variable for that. If that’s too much pain then stick to using the default values, i.e. let’s say to run evaluate-mini.py it by default only uses the mini dataset. Go to Key environment variables at the bottom for more info.
 
-### Exporting model weights {requires checkpoints/best_1.pt to be present} (Optional if models downloaded from drive)
+### Exporting model weights {requires checkpoints/best_1.pt to be present} (Optional step if models downloaded from drive)
 
 Before running inference, export the raw training checkpoint to inference-ready formats ( but there is no need if you have already download the exported models from models folder in our [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) and placed them at models/ folder )  :
 
@@ -595,7 +594,7 @@ This reads `checkpoints/best_1.pt` and writes two files into `models/`:
 - `model_fp16.pt` — half-precision weights (~500 MB)
 
 
-### Single-scene inference and visualisation { requires Nuscenes mini/ trainval dataset and models/ ( model_fp32.pt is default ) }
+### Single-scene inference and visualisation { requires Nuscenes mini or trainval dataset and models/ ( model_fp32.pt is default ) }
 
 ```powershell
 python single_inference.py                     # mini dataset, random scene
@@ -685,7 +684,7 @@ Animation saved → D:\zero-latency\visualisations\multi_agent_prediction.mp4
 To reproduce this scene: python single_inference.py --seed 5575121
 Done.
 ```
-### Training {requires Nuscenes mini/ trainval dataset }
+### Training {requires Nuscenes mini or trainval dataset }
 
 Running these scripts produces best_1.pt , best_2.pt and latest.pt in the checkpoints folder. Our general concern is only best_1.pt ( which gets only when the model is able to beat the best val_loss value, best_2.pt keeps second best model for backup in case the best_1.pt gets corrupted ).
 
@@ -718,7 +717,7 @@ Similarly all other env variable presented at the bottom of the readme can be us
 
 IMPORTANT – please don’t try to run this script as it requires a very huge ram , lets say you even want to work with 1 part of trainval data i.e 30 GB  you would require atleast 45 GB RAM and recommended 64 GB RAM to run, the script uses ram – caching i.e it caches the entire dataset to ram, for best performance. Though you can use the DATASET_LIMIT env to limit the dataset then run it safely.
 
-### Evaluation { requires Nuscenes mini/ trainval dataset and model }
+### Evaluation { requires Nuscenes mini or trainval dataset and model or checkpoint - default model }
 
 **Mini dataset:**
 ```powershell
