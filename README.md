@@ -383,9 +383,9 @@ models/
 └── model_fp16.pt
 ```
 
-#### 8. (Optional) Download trainval metadata for full dataset evaluation
+#### 8. (Optional, but needed to run evaluate-trainval.py and train-linux-32GB-VRAM.py) Download trainval metadata for full dataset evaluation
 
-Download the trainval metadata from the same [Google Drive folder](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) and extract it into `nuscenes/` at the repo root:
+Download the trainval dataset and metadata using the links provided in the `nuscenes/links.txt`, simply copy one link and paste it in browser to start download ( you can download any of the parts out of 10 but metadata is mandetory ) and extract it into `nuscenes/` at the repo root:
 
 ```
 nuscenes/
@@ -394,8 +394,7 @@ nuscenes/
     ├── sample.json
     └── ...
 ```
-
-Then download sensor blob parts (each ~30 GB) from [nuscenes.org](https://www.nuscenes.org/) and extract them into the same `nuscenes/` folder. All parts merge automatically into `nuscenes/samples/` and `nuscenes/sweeps/`.
+All parts merge automatically into `nuscenes/samples/` and `nuscenes/sweeps/`. I recommend not downloading this just for evaluation as we have already attached the results after evalutions on part (9 - 10) of the trainval dataset, it just the size of these datasets it too large. Rest is your wish.
 
 #### 9. Verify setup
 
