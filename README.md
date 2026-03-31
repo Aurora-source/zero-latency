@@ -1,4 +1,4 @@
-# Zero-Latency (IMPORTANT please read this first section before moving forward)  — 
+# Zero-Latency (IMPORTANT please read this first section before moving forward)   
 
 A multi-modal transformer-based trajectory prediction model trained on the nuScenes dataset. The model predicts future trajectories of traffic agents (vehicles, pedestrians, cyclists) using historical motion data and scene context. 
 
