@@ -363,11 +363,11 @@ $env:NUSCENES_ROOT="<directory_where_dataset_is_present>"
 
 #### 7. Download model weights
 
-All model weights, the project presentation are available in the shared Google Drive folder:
+All model weights, the project presentation are available in the shared Google Drive folder, (please check files names after downloading, google sometimes changes the files name after downloading , it may add random strings / numbers to file names{example best_1(1).pt or best_1-000.pt} please make sure the file name stays the same ,or rename it to best_1.pt, model_fp32.pt, model_fp16.pt accordingly). AFTER DOWNLOADING PLEASE PLACE THE FILES TO THE EXACT SAME FOLDERS MENTIONED BELOW :
 
 **[Download from Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing)**
 
-The folder is organised as follows:
+The google folder is organised as follows:
 
 | Folder / File | Description |
 |---|---|
@@ -413,13 +413,13 @@ If these return the version number ,then the setup is complete. Also just once c
 
 ### Cloud (Linux, RTX 5090, RAM – 256 GB, PyTorch (Vast) template)
 
-#### 1. Run setup script
+#### 1. Create setup script then run it
 
 ```bash
-bash setup.sh
+nano setup.sh
 ```
 
-This script handles everything in one shot — clone, checkout, all Python dependencies, PyTorch cu128 nightly, and a verification check at the end. The full script is reproduced below for reference:
+This script handles everything in one shot — clone, checkout, all Python dependencies, PyTorch cu128 nightly, and a verification check at the end. Just copy and paste it :
 
 ```bash
 #!/bin/bash
@@ -494,6 +494,12 @@ echo "Next: download nuscenes data using aria2 with links.txt"
 echo "Then run: NUSCENES_ROOT=/workspace/zero-latency/nuscenes python train.py"
 ```
 
+To run it use :
+
+```bash
+bash setup.sh
+```
+
 #### 2. Install FFmpeg
 
 FFmpeg is usually pre-installed on most cloud images. Verify with:
@@ -508,7 +514,7 @@ If it is missing:
 apt-get update && apt-get install -y ffmpeg
 ```
 
-#### 3. Set up rclone ([Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) access)
+#### 3. Set up rclone, (Optional) ([Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) access)
 
 rclone is used on the cloud server to pull the latest checkpoint from [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) before training starts, and to push the new best checkpoint back up when training finishes. On Windows you don't need rclone — just use [Google Drive](https://drive.google.com/drive/folders/16s7dJhrjQLzVtm-OpdlNWsWP6TRgp2OP?usp=sharing) in the browser directly.
 
@@ -534,6 +540,12 @@ rclone config
 #### 4. Download nuScenes dataset
 
 `links.txt` at `data/links.txt` has the links to all 10 parts of trainval dataset, as well the metadata. We use aria to manage the downloads.
+First decide which dataset parts (1-10) you want to download using :
+
+```bash
+nano /workspace/zero-latency/nuscenes/links.txt
+```
+Then run the command below to start downloading them :
 
 ```bash
 apt-get install -y aria2
@@ -568,7 +580,7 @@ nuscenes/
 └── v1.0-trainval/
 ```
 
-#### 6. Download latest checkpoint
+#### 6. Download latest checkpoint (Optional, if starting tranning from scratch)
 
 ```bash
 rclone copy "Rikon:zero-latency/checkpoints/best_1.pt" \
