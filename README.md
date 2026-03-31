@@ -374,8 +374,9 @@ The folder is organised as follows:
 | `checkpoints/best_1.pt` | Raw training checkpoint (~3.9 GB) |
 | `models/model_fp32.pt` | Exported full-precision model — recommended for inference (~1 GB) |
 | `models/model_fp16.pt` | Exported half-precision model — faster, slightly lower accuracy (~500 MB) |
-| `nuscenes/` | nuScenes mini dataset with metadata pre-compressed as `.tar` |
+| `v1.0-mini.tgz` | nuScenes mini dataset |
 | `zero-latency.pptx` | Hackathon presentation |
+| `zero-latency.pptx` | Hackathon presentation converted to pdf |
 
 Place the downloaded files in the correct local folders:
 
