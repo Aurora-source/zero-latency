@@ -1,12 +1,18 @@
-# Zero-Latency — Trajectory Prediction Pipeline 
+# Zero-Latency — 
 
-A multi-modal transformer-based trajectory prediction model trained on the nuScenes dataset. The model predicts future trajectories of traffic agents (vehicles, pedestrians, cyclists) using historical motion data and scene context.
+A multi-modal transformer-based trajectory prediction model trained on the nuScenes dataset. The model predicts future trajectories of traffic agents (vehicles, pedestrians, cyclists) using historical motion data and scene context. 
+
+
+Orignal problem statement :
+Participants must develop a model that predicts the future coordinates (next 3 seconds) of pedestrians and cyclists based on 2 seconds of past motion.
+
+But we decide to improve the model by using the past 3 secs of data and then predicting the next 6 secs of data instead. Doing this may tank our ADE and FDE as we could have shown much better results for less time predicted but I thought that this model would be better in the long run. 
 
 ---
 
 ## Prediction results
 
-The visualisation below shows the model predicting 6 seconds of future trajectories for all agents in a single scene. Solid lines are the model's best prediction (minADE mode), dashed lines are ground truth, and faint lines show all K=6 predicted modes. Also the results change for every scene , ADE and FDE are higher for scenes with higher moving objects. ( TO REPRODUCE the exact scene presented here use python single_inference.py --seed 5575121 , the seed is important )
+The visualisation below shows the model predicting 6 seconds of future trajectories for all agents in a single scene. Solid lines are the model's best prediction (minADE mode), dashed lines are ground truth, and faint lines show all K=6 predicted modes. Also the results change for every scene , ADE and FDE are higher for scenes with higher moving objects. In the animation you can see the model taking previous 6 steps (3 secs) and then predicting the next 12 steps (6 secs)  ( TO REPRODUCE the exact scene presented here use python single_inference.py --seed 5575121 , the seed is important )
 
 ![Multi-agent trajectory prediction](visualisations/multi_agent_prediction.png)
 
@@ -80,7 +86,7 @@ Output: (batch, K=6, agents, time=12, 2)
 
 **Total parameters: ~263M**
 
-Each future timestep is 0.5 seconds apart — the model predicts 6 seconds into the future.
+Each future timestep is 0.5 seconds apart — the model predicts 6 seconds into the future taking in 3 seconds of past.
 
 ---
 
