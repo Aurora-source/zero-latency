@@ -371,7 +371,7 @@ The folder is organised as follows:
 
 | Folder / File | Description |
 |---|---|
-| `checkpoints/best_1.pt` | Raw training checkpoint (~3.9 GB) |
+| `checkpoints/best_1.pt` | Raw training checkpoint (~2.9 GB) |
 | `models/model_fp32.pt` | Exported full-precision model — recommended for inference (~1 GB) |
 | `models/model_fp16.pt` | Exported half-precision model — faster, slightly lower accuracy (~500 MB) |
 | `v1.0-mini.tgz` | nuScenes mini dataset |
