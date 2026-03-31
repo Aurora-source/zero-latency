@@ -4,9 +4,9 @@ A multi-modal transformer-based trajectory prediction model trained on the nuSce
 
 
 Orignal problem statement :
-Participants must develop a model that predicts the future coordinates (next 3 seconds) of pedestrians and cyclists based on 2 seconds of past motion.
+" Participants must develop a model that predicts the future coordinates (next 3 seconds) of pedestrians and cyclists based on 2 seconds of past motion. "
 
-But we decide to improve the model by using the past 3 secs of data and then predicting the next 6 secs of data instead. Doing this may tank our ADE and FDE as we could have shown much better results for less time predicted but I thought that this model would be better in the long run. 
+But we decide to improve the model by using the past 3 seconds of motion and then predicting the next 6 seconds of motion instead. Doing this may tank our ADE and FDE as we could have shown much better results for less time predicted but I thought that this model would be better in the long run. Also model can predict the motion of other vechicals too.
 
 ---
 
@@ -67,7 +67,7 @@ The pipeline consists of six learned modules working in sequence:
 ## Model architecture
 
 ```
-Input: (batch, time=6, agents=10, features=8)
+Input: (batch, time= 6 steps (3 seconds), agents=10, features=8)
          ↓
 InputEmbedding          ~0.5M params
          ↓
@@ -81,7 +81,7 @@ GoalPredictionNetwork   ~0.6M params
          ↓
 MultiModalDecoder       ~82M params
          ↓
-Output: (batch, K=6, agents, time=12, 2)
+Output: (batch, K=6, agents, time= 12 steps (6 seconds), 2)
 ```
 
 **Total parameters: ~263M**
