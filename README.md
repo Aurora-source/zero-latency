@@ -6,7 +6,7 @@ A multi-modal transformer-based trajectory prediction model trained on the nuSce
 Orignal problem statement :
 " Participants must develop a model that predicts the future coordinates (next 3 seconds) of pedestrians and cyclists based on 2 seconds of past motion. "
 
-But we decide to improve the model by using the past 3 seconds of motion and then predicting the next 6 seconds of motion instead. Doing this may tank our ADE and FDE as we could have shown much better results for less time predicted but I thought that this model would be better in the long run. Also model can predict the motion of other vechicals too.
+But we decide to improve the model by using the past 3 seconds of motion and then predicting the next 6 seconds of motion instead. Doing this may tank our ADE and FDE as we could have shown much better results for less time predicted but I thought that this model would be better in the long run. Also , this model can predict the motion of other vechicles as well.
 
 ---
 
